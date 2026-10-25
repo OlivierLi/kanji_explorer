@@ -867,7 +867,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         file_path = (STATIC_DIR / unquoted).resolve()
 
         # パストラバーサル防止
-        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+        if not file_path.is_relative_to(STATIC_DIR.resolve()):
             self._send_error_json("不正なパスです。", status=403)
             return
 

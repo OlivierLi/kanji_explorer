@@ -212,3 +212,17 @@ class TestDecomposeCharacter:
         # 相互参照や再帰による無限ループが発生せず正常終了すること
         tree = ids_parser.decompose_character("日", max_depth=8, compute_bbox=True)
         assert tree is not None
+
+    def test_decompose_ivs_character(self):
+        # 異体字セレクタ (IVS) を含む文字列が単一文字として正しく分解されること
+        tree = ids_parser.decompose_character("神\U000E0100", max_depth=2, compute_bbox=True)
+        assert tree["char"] == "神"
+        assert tree["type"] == "op"
+        # 異体字セレクタが架空の子要素として紛れ込まないこと
+        assert not any(c.get("raw_char") == "\U000E0100" for c in tree.get("children", []))
+
+    def test_decompose_codepoint_string(self):
+        # U+XXXX 表記が自動解決され、対象漢字の構造が正しく分解されること
+        tree = ids_parser.decompose_character("U+86CD", max_depth=2, compute_bbox=True)
+        assert tree["char"] == "蛍"
+        assert tree["op"] == "⿱"

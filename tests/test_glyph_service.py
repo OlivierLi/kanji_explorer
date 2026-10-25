@@ -27,6 +27,18 @@ class TestJigmoOutlineExtraction:
         path_d = glyph_service.get_jigmo_path("\ufffd")
         assert path_d is None
 
+    def test_get_jigmo_path_with_ivs(self):
+        # 異体字セレクタを含む文字 (神\U000E0100) から基底字のアウトラインが正常取得されること
+        path_d = glyph_service.get_jigmo_path("神\U000E0100")
+        assert path_d is not None
+        assert path_d == glyph_service.get_jigmo_path("神")
+
+    def test_extract_kanjivg_stroke_layers_with_ivs(self):
+        # 異体字セレクタを含む文字でも KanjiVG 筆画が正常抽出されること
+        res = glyph_service.extract_kanjivg_stroke_layers("神\U000E0100")
+        assert res.get("has_kvg") is True
+        assert len(res.get("all_strokes", [])) > 0
+
 
 class TestSvgPathParsing:
     """_parse_svg_path_points によるSVGコマンド解析."""

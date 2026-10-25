@@ -28,7 +28,7 @@ WIKTIONARY_GZ_PATH = DATA_DIR / "ja-extract.jsonl.gz"
 WORDNET_GZ_PATH = DATA_DIR / "wnjpn.db.gz"
 WORDNET_DB_PATH = DATA_DIR / "wnjpn.db"
 
-KANJI_RE = re.compile(r"[\u4E00-\u9FFF\u3400-\u4DBF\U00020000-\U0002EBEF]")
+KANJI_RE = re.compile(r"[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\U00020000-\U0002FA1F\U00030000-\U0003347F]")
 
 
 def map_pos_title(raw_pos: str) -> str:

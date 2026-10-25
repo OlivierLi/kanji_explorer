@@ -175,6 +175,9 @@ class TestHttpMethodsAndErrors:
             assert resp.status == 200
             body = resp.read().decode("utf-8")
             assert 'data-theme="light"' in body
+            assert 'mode=kvg&theme=light' in body
+            assert 'mode=mincho&theme=light' in body
+            assert '<input type="hidden" name="theme" value="light">' in body
 
 
 class TestApiWords:

@@ -911,6 +911,62 @@ class TestBugApiGlyphCodepointAndParam:
         assert 'transform="translate(0, 880) scale(1, -1)"' in svg_cp
 
 
+class TestBugRadicalFormMapBidirectionalSymmetry:
+    """Bug: 部首変形・異体字の双方向対称性および新旧字体・簡体字の完全マッピング検証."""
+
+    @pytest.mark.parametrize("base,variant", [
+        ("鳥", "⻦"),
+        ("鳥", "鸟"),
+        ("魚", "⻥"),
+        ("魚", "鱼"),
+        ("馬", "⻢"),
+        ("馬", "马"),
+        ("食", "⻝"),
+        ("食", "飠"),
+        ("食", "饣"),
+        ("衣", "⻂"),
+        ("衣", "衤"),
+        ("金", "⻐"),
+        ("金", "釒"),
+        ("金", "钅"),
+        ("虎", "⻁"),
+        ("鬼", "⻤"),
+        ("骨", "⻣"),
+        ("見", "⻅"),
+        ("見", "见"),
+        ("足", "⻊"),
+        ("足", "𧾷"),
+        ("人", "⺅"),
+        ("人", "亻"),
+        ("心", "⺖"),
+        ("心", "忄"),
+        ("水", "⺢"),
+        ("水", "氺"),
+        ("示", "⺬"),
+        ("示", "礻"),
+        ("斉", "⻫"),
+        ("斉", "齊"),
+        ("斉", "齐"),
+        ("歯", "⻭"),
+        ("歯", "齒"),
+        ("歯", "齿"),
+        ("竜", "⻯"),
+        ("竜", "龍"),
+        ("竜", "龙"),
+        ("亀", "⻲"),
+        ("亀", "龜"),
+        ("亀", "龟"),
+        ("糸", "糹"),
+        ("糸", "纟"),
+    ])
+    def test_radical_bidirectional_equivalence(self, base, variant):
+        eq_base = glyph_service.get_equivalent_symbols(base)
+        eq_variant = glyph_service.get_equivalent_symbols(variant)
+        assert variant in eq_base, f"{base} の等価集合に {variant} が含まれていません"
+        assert base in eq_variant, f"{variant} の等価集合に {base} が含まれていません"
+
+
+
 
 
 

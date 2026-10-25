@@ -369,11 +369,13 @@ function escapeAttr(str) {
 function renderGlyphHTML(token, cssClass = "") {
   if (!token) return "";
   const isEntity = token.startsWith("&") && token.endsWith(";");
+  const safeCls = escapeAttr(cssClass);
+  const safeTok = escapeAttr(token);
   if (isEntity) {
     const safeSrc = `/api/glyph?c=${encodeURIComponent(token)}`;
-    return `<img src="${safeSrc}" class="entity-glyph-img ${cssClass}" alt="${token}" onerror="this.outerHTML='<span class=\\'kanji-text\\'>${token}</span>'">`;
+    return `<img src="${safeSrc}" class="entity-glyph-img ${safeCls}" alt="${safeTok}" onerror="this.outerHTML='<span class=\\'kanji-text\\'>${safeTok}</span>'">`;
   }
-  return `<span class="kanji-text ${cssClass}">${token}</span>`;
+  return `<span class="kanji-text ${safeCls}">${safeTok}</span>`;
 }
 
 /**
@@ -724,7 +726,7 @@ function updateLockControllerUI() {
     btnOpenMain.type = "button";
     btnOpenMain.className = "btn-open-locked-main";
     btnOpenMain.id = "btnOpenLockedMain";
-    btnOpenMain.innerHTML = `「${lockedNode.char}」を単体調査 →`;
+    btnOpenMain.textContent = `「${lockedNode.char}」を単体調査 →`;
     btnOpenMain.title = `「${lockedNode.char}」を主文字として詳細分解します`;
     btnOpenMain.addEventListener("click", () => {
       inspectCharacter(lockedNode.char);
@@ -2052,7 +2054,7 @@ function renderFindResults(results, activeKeywords = []) {
       const indirectBadge = document.createElement("span");
       indirectBadge.className = "badge badge-indirect";
       if (viaChar) {
-        indirectBadge.innerHTML = `間接（経由: <a class="via-link" data-via="${viaChar}">${viaChar}</a>）`;
+        indirectBadge.innerHTML = `間接（経由: <a class="via-link" data-via="${escapeAttr(viaChar)}">${escapeAttr(viaChar)}</a>）`;
         const viaLink = indirectBadge.querySelector(".via-link");
         if (viaLink) {
           viaLink.addEventListener("click", (e) => {
@@ -2213,9 +2215,9 @@ function renderWordsGrid(words, currentKanji) {
     let lemmaHtml = "";
     for (const ch of (w.lemma || "")) {
       if (ch === currentKanji) {
-        lemmaHtml += `<span class="highlight-kanji">${ch}</span>`;
+        lemmaHtml += `<span class="highlight-kanji">${escapeAttr(ch)}</span>`;
       } else {
-        lemmaHtml += ch;
+        lemmaHtml += escapeAttr(ch);
       }
     }
     lemmaSpan.innerHTML = lemmaHtml;
@@ -2299,7 +2301,7 @@ function renderWordsGrid(words, currentKanji) {
 
     // カードフッター: 構成漢字の調査ジャンプボタン
     const otherKanjis = [];
-    const kanjiRegex = /[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2EBEF}]/u;
+    const kanjiRegex = /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\u{20000}-\u{2FA1F}\u{30000}-\u{3347F}]/u;
     for (const c of (w.lemma || "")) {
       if (kanjiRegex.test(c) && c !== currentKanji && !otherKanjis.includes(c)) {
         otherKanjis.push(c);

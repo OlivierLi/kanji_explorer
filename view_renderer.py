@@ -192,15 +192,16 @@ def render_side_by_side_html(
     ids_formula = ids_parser.get_character_ids(canonical_char) or tree.get("ids", "") or canonical_char
     joyo_badge_str = f"常用漢字 {joyo_index}/{joyo_total}" if joyo_index else "常用漢字外"
 
-    prev_link = f'<a href="/view?char={urllib.parse.quote(prev_char)}&mode={mode}" class="audit-btn nav-btn" title="前の漢字 (← キー)">◀ {prev_char}</a>' if prev_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">◀ 前</span>'
-    next_link = f'<a href="/view?char={urllib.parse.quote(next_char)}&mode={mode}" class="audit-btn nav-btn" title="次の漢字 (→ キー)">{next_char} ▶</a>' if next_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">次 ▶</span>'
+    theme_query = f"&theme={theme}" if "theme" in params else ""
+    prev_link = f'<a href="/view?char={urllib.parse.quote(prev_char)}&mode={mode}{theme_query}" class="audit-btn nav-btn" title="前の漢字 (← キー)">◀ {html.escape(prev_char)}</a>' if prev_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">◀ 前</span>'
+    next_link = f'<a href="/view?char={urllib.parse.quote(next_char)}&mode={mode}{theme_query}" class="audit-btn nav-btn" title="次の漢字 (→ キー)">{html.escape(next_char)} ▶</a>' if next_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">次 ▶</span>'
 
     full_html = f'''<!DOCTYPE html>
 <html lang="ja" data-theme="{theme}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>【{canonical_char}】構成要素選択ハイライト並置ビュー | 漢字構造エクスプローラー</title>
+  <title>【{html.escape(canonical_char)}】構成要素選択ハイライト並置ビュー | 漢字構造エクスプローラー</title>
   <link rel="stylesheet" href="/static/styles.css">
   <style>
     body.audit-view {{
@@ -421,9 +422,9 @@ def render_side_by_side_html(
 <body class="audit-view hide-bboxes">
   <header class="audit-navbar">
     <div class="audit-title-group">
-      <span class="audit-char-badge">{canonical_char}</span>
+      <span class="audit-char-badge">{html.escape(canonical_char)}</span>
       <div>
-        <div style="font-weight: 600; font-size: 1.05rem;">{canonical_char} ({meta.get('codepoint', '')}) 並置検証ビュー</div>
+        <div style="font-weight: 600; font-size: 1.05rem;">{html.escape(canonical_char)} ({html.escape(meta.get('codepoint', ''))}) 並置検証ビュー</div>
         <div class="audit-meta-group" style="margin-top: 4px;">
           <span class="audit-badge highlight">{joyo_badge_str}</span>
           <span class="audit-badge">{grade_text}</span>
@@ -438,12 +439,13 @@ def render_side_by_side_html(
 
     <div class="audit-controls">
       <div class="audit-mode-group">
-        <a href="/view?char={urllib.parse.quote(canonical_char)}&mode=kvg" class="audit-btn {'active' if mode == 'kvg' else ''}">🖌 筆画表示 (KanjiVG)</a>
-        <a href="/view?char={urllib.parse.quote(canonical_char)}&mode=mincho" class="audit-btn {'active' if mode == 'mincho' else ''}">🔤 印刷書体 (明朝体)</a>
+        <a href="/view?char={urllib.parse.quote(canonical_char)}&mode=kvg{theme_query}" class="audit-btn {'active' if mode == 'kvg' else ''}">🖌 筆画表示 (KanjiVG)</a>
+        <a href="/view?char={urllib.parse.quote(canonical_char)}&mode=mincho{theme_query}" class="audit-btn {'active' if mode == 'mincho' else ''}">🔤 印刷書体 (明朝体)</a>
       </div>
       <form class="audit-search-form" action="/view" method="get">
         <input type="hidden" name="mode" value="{mode}">
-        <input type="text" name="char" class="audit-input" placeholder="漢字・部品..." value="{canonical_char}">
+        {f'<input type="hidden" name="theme" value="{theme}">' if "theme" in params else ''}
+        <input type="text" name="char" class="audit-input" placeholder="漢字・部品..." value="{html.escape(canonical_char)}">
         <button type="submit" class="audit-btn">表示</button>
       </form>
       <div style="display: flex; gap: 4px;">
@@ -464,8 +466,8 @@ def render_side_by_side_html(
   </main>
 
   <script>
-    const prevUrl = {json.dumps(f"/view?char={urllib.parse.quote(prev_char)}&mode={mode}" if prev_char else "")};
-    const nextUrl = {json.dumps(f"/view?char={urllib.parse.quote(next_char)}&mode={mode}" if next_char else "")};
+    const prevUrl = {json.dumps(f"/view?char={urllib.parse.quote(prev_char)}&mode={mode}{theme_query}" if prev_char else "")};
+    const nextUrl = {json.dumps(f"/view?char={urllib.parse.quote(next_char)}&mode={mode}{theme_query}" if next_char else "")};
 
     function toggleTheme() {{
       const cur = document.documentElement.getAttribute('data-theme') || 'dark';

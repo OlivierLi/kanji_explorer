@@ -5,7 +5,9 @@ vulture を用いて ids_parser.py, glyph_service.py, server.py の静的解析�
 """
 
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 
 
 def test_zero_dead_code_with_vulture():
@@ -20,14 +22,11 @@ def test_zero_dead_code_with_vulture():
         str(repo_root / "vulture_whitelist.py"),
     ]
 
-    cmd = [
-        "python3",
-        "-m",
-        "vulture",
-        *target_files,
-        "--min-confidence",
-        "60",
-    ]
+    vulture_bin = shutil.which("vulture")
+    if vulture_bin:
+        cmd = [vulture_bin, *target_files, "--min-confidence", "60"]
+    else:
+        cmd = [sys.executable, "-m", "vulture", *target_files, "--min-confidence", "60"]
 
     res = subprocess.run(
         cmd,

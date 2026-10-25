@@ -8,6 +8,7 @@ Jigmoフォントからの正確なベクターアウトライン抽出、CHISE 
 
 from __future__ import annotations
 
+from collections import defaultdict
 import functools
 import glob
 import gzip
@@ -59,10 +60,10 @@ RADICAL_FORM_MAP: dict[str, set[str]] = {
     "彐": {"⺕", "彐", "ヨ"},
     "冖": {"冖", "冂"},
     "冂": {"冂", "冖"},
-    "⺌": {"⺌", "⺍", "𭕄", "小"},
-    "⺍": {"⺍", "⺌", "𭕄", "小"},
-    "𭕄": {"𭕄", "⺍", "⺌", "小"},
-    "小": {"小", "⺌", "⺍", "𭕄"},
+    "⺌": {"⺌", "小"},
+    "小": {"小", "⺌"},
+    "⺍": {"⺍", "𭕄"},
+    "𭕄": {"𭕄", "⺍"},
     "龸": {"龸", "𰃮"},
     "𰃮": {"𰃮", "龸"},
     "⺘": {"扌", "手"},
@@ -79,13 +80,17 @@ RADICAL_FORM_MAP: dict[str, set[str]] = {
     "⺨": {"犭", "犬"},
     "⺩": {"王", "玉"},
     "⺪": {"疋"},
+    "⺫": {"罒", "网", "目"},
+    "⺬": {"示", "礻"},
     "⺭": {"礻", "示"},
     "⺮": {"竹"},
-    "⺯": {"糸"},
-    "⺰": {"纟"},
+    "⺯": {"糸", "糹"},
+    "⺰": {"纟", "糸"},
     "⺱": {"网", "罒"},
     "⺲": {"罒", "网"},
     "⺳": {"罒", "网"},
+    "⺴": {"罒", "网"},
+    "⺵": {"罒", "网"},
     "⺶": {"羊"},
     "⺷": {"羊"},
     "⺸": {"羊"},
@@ -136,6 +141,23 @@ RADICAL_FORM_MAP: dict[str, set[str]] = {
     "⻨": {"麦", "麥"},
     "⻩": {"黄", "黃"},
     "⻪": {"黽", "黾"},
+    "⻫": {"斉", "齊"},
+    "⻬": {"齐", "齊"},
+    "⻭": {"歯", "齒"},
+    "⻮": {"齿", "齒"},
+    "⻯": {"竜", "龍"},
+    "⻰": {"龙", "龍"},
+    "⻱": {"龜"},
+    "⻲": {"亀", "龜"},
+    "⻳": {"龟", "龜"},
+    "⺅": {"亻", "人"},
+    "⺈": {"刀", "刂"},
+    "⺉": {"刂", "刀"},
+    "⺋": {"卩"},
+    "⺖": {"忄", "心"},
+    "⺗": {"心"},
+    "⺢": {"氺", "水"},
+    "⺙": {"攵", "攴"},
     "雨": {"雨", "⻗"},
     "青": {"青", "⻘"},
     "角": {"角", "⻆", "⻇"},
@@ -149,7 +171,44 @@ RADICAL_FORM_MAP: dict[str, set[str]] = {
     "麦": {"麦", "麥", "⻨"},
     "黄": {"黄", "黃", "⻩"},
     "黽": {"黽", "黾", "⻪"},
+    "斉": {"斉", "齊", "齐", "⻫", "⻬"},
+    "歯": {"歯", "齒", "齿", "⻭", "⻮"},
+    "竜": {"竜", "龍", "龙", "⻯", "⻰"},
+    "亀": {"亀", "龜", "龟", "⻱", "⻲", "⻳"},
+    "糸": {"糸", "糹", "纟", "⺯", "⺰"},
+    "水": {"水", "氵", "氺", "⺡", "⺢"},
+    "手": {"手", "扌", "⺘"},
+    "心": {"心", "忄", "⺖", "⺗"},
+    "人": {"人", "亻", "𠆢", "⺅"},
+    "刀": {"刀", "刂", "⺈", "⺉"},
+    "鳥": {"鳥", "鸟", "⻦"},
+    "魚": {"魚", "鱼", "⻥"},
+    "馬": {"馬", "马", "⻢"},
+    "食": {"食", "飠", "饣", "𩙿", "⻝", "⻞", "⻟", "⻠"},
+    "金": {"金", "釒", "钅", "⻐"},
+    "衣": {"衣", "衤", "⻂"},
+    "見": {"見", "见", "⻅"},
+    "足": {"足", "𧾷", "⻊"},
+    "虎": {"虎", "⻁"},
+    "西": {"西", "覀", "⻃", "⻄"},
+    "鬼": {"鬼", "⻤"},
+    "骨": {"骨", "⻣"},
+    "風": {"風", "风", "⻛"},
+    "飛": {"飛", "飞", "⻜"},
+    "頁": {"頁", "页", "⻚"},
+    "韋": {"韋", "韦", "⻙"},
+    "鹵": {"鹵", "卤", "⻧"},
 }
+
+# 全部首変形マップの対称閉包（双方向性の完全保証）
+_symmetric_radical_map: dict[str, set[str]] = defaultdict(set)
+for _src_k, _tgt_set in RADICAL_FORM_MAP.items():
+    _symmetric_radical_map[_src_k].add(_src_k)
+    for _tgt_v in _tgt_set:
+        _symmetric_radical_map[_src_k].add(_tgt_v)
+        _symmetric_radical_map[_tgt_v].add(_src_k)
+        _symmetric_radical_map[_tgt_v].add(_tgt_v)
+RADICAL_FORM_MAP = {k: v for k, v in _symmetric_radical_map.items()}
 
 
 def get_equivalent_symbols(elem: str) -> set[str]:
@@ -232,11 +291,16 @@ class _JigmoFontManager:
         if not self._fonts or not self._cmaps:
             return None
 
+        # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
+        char_clean = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", char)
+        if not char_clean:
+            return None
+
         # ⺍ の場合は 𭕄 (U+2D544) へのフォールバックも考慮
-        candidates = [char]
-        if char == "⺍":
+        candidates = [char_clean]
+        if char_clean == "⺍":
             candidates.append("𭕄")
-        elif char == "𭕄":
+        elif char_clean == "𭕄":
             candidates.append("⺍")
 
         for c in candidates:
@@ -1228,6 +1292,8 @@ class KanjiVGService:
     def _normalize_codepoint_hex(self, char_or_hex: str) -> str:
         """文字または16進文字列を KanjiVG 形式の小文字16進数（例: '086cd'）に正規化します。"""
         token = char_or_hex.strip()
+        # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
+        token = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", token)
         if len(token) == 1:
             return f"{ord(token):05x}"
         if token.upper().startswith("U+"):
@@ -1235,10 +1301,12 @@ class KanjiVGService:
                 return f"{int(token[2:], 16):05x}"
             except ValueError:
                 return token.lower()
-        try:
-            return f"{int(token, 16):05x}"
-        except ValueError:
-            return token.lower()
+        if re.match(r"^[0-9a-fA-F]{4,6}$", token):
+            try:
+                return f"{int(token, 16):05x}"
+            except ValueError:
+                return token.lower()
+        return token.lower()
 
     def get_kanji_xml(self, char_or_hex: str) -> str | None:
         """指定された文字または16進コードの <kanji> XML 文字列を取得します。"""
