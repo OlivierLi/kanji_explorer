@@ -19,9 +19,14 @@ coverage_html/
 *.sqlite
 *.sqlite3
 
-# Downloaded datasets & build artifacts (keep compressed database)
+# Downloaded datasets & build artifacts (keep runtime datasets & compressed database)
 data/*
 !data/kanji_explorer.db.gz
+!data/kanjivg.xml.gz
+!data/cjkvi-ids.txt
+!data/EquivalentUnifiedIdeograph.txt
+!data/chise-ids/
+!data/chise-ids/**
 
 # Screenshots, logs, and OS files
 Screenshot_*.png

@@ -1,7 +1,7 @@
 """漢字探索データベース構築スクリプト (build_db.py).
 
 CHISE IDS、CJKVI-IDS、KANJIDIC2、およびUnihanデータソースを統合し、
-SQLiteデータベース (/home/olivier/git/kanji/data/kanji_explorer.db) を構築します。
+SQLiteデータベース (data/kanji_explorer.db) を構築します。
 100%日本語のメタデータおよび構造辞書を提供し、英語の意味・定義（meaning, kDefinition）は一切保存しません。
 """
 

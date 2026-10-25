@@ -24,24 +24,33 @@ A local, 100% offline interactive web application for decomposing kanji into hie
 
 | File | Responsibility |
 | :--- | :--- |
-| [`server.py`](file:///home/olivier/git/kanji/server.py) | Zero-dependency Python HTTP server serving `/`, `/static/*`, `/api/char`, `/api/ids-find`, and `/api/glyph`. |
-| [`ids_parser.py`](file:///home/olivier/git/kanji/ids_parser.py) | Tokenizer and recursive AST parser for all 16 Unicode IDC operators (`⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿`), CHISE entity resolution (`CHISE_ENTITY_UNICODE_MAP`), sub-component decomposition (`COMPONENT_SUBDECOMPOSITIONS`), CJKVI circled-number placeholder filtering (`①`–`⑳`), and 2D spatial/stroke clip geometry (`compute_bboxes`). |
-| [`glyph_service.py`](file:///home/olivier/git/kanji/glyph_service.py) | Offline TrueType outline extractor (`Jigmo*.ttf`), connected ink-island & hole-contour analyzer (`_extract_ink_islands`), recursive island-to-AST partitioner (`_assign_ink_islands_to_tree`), and interactive SVG payload builder (`build_interactive_ids_svg`). |
-| [`jp_metadata.py`](file:///home/olivier/git/kanji/jp_metadata.py) | Japanese character metadata formatter, Unicode CJK block classifier, 214 Kangxi radical dictionary (`KANGXI_RADICALS`), and radical/variant equivalence table (`⺍` `U+2E8D` ⇄ `𭕄` `U+2D544`). |
-| [`build_db.py`](file:///home/olivier/git/kanji/build_db.py) | Offline ETL pipeline that builds `data/kanji_explorer.db` (SQLite) from `data/chise-ids/`, `data/cjkvi-ids.txt`, `data/kanjidic2.xml.gz`, `data/kanjivg.xml.gz`, `data/Unihan.zip`, and `data/EquivalentUnifiedIdeograph.txt`. |
-| [`static/index.html`](file:///home/olivier/git/kanji/static/index.html) | 3-column application layout (Left: Interactive Canvas + Progressive Lock Bar + HUD + Attributes; Middle: Alternative IDS Selector + Recursive Decomposition Tree; Right: `ids-find` Reverse Component Lookup). |
-| [`static/styles.css`](file:///home/olivier/git/kanji/static/styles.css) | Dark (`墨色`) & Light (`和紙`) theme styles, Mincho SVG slice/lock/hover transitions, and tree/card layout rules. |
-| [`static/app.js`](file:///home/olivier/git/kanji/static/app.js) | Frontend state management, SVG layer & `<clipPath>` rendering, progressive click-to-lock hit-testing, multi-character word breadcrumb splitting, and bidirectional canvas/tree/reverse-lookup synchronization. |
+| [`server.py`](server.py) | Zero-dependency Python HTTP server serving `/`, `/static/*`, `/api/char`, `/api/ids-find`, and `/api/glyph`. |
+| [`ids_parser.py`](ids_parser.py) | Tokenizer and recursive AST parser for all 16 Unicode IDC operators (`⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿`), CHISE entity resolution (`CHISE_ENTITY_UNICODE_MAP`), sub-component decomposition (`COMPONENT_SUBDECOMPOSITIONS`), CJKVI circled-number placeholder filtering (`①`–`⑳`), and 2D spatial/stroke clip geometry (`compute_bboxes`). |
+| [`glyph_service.py`](glyph_service.py) | Offline TrueType outline extractor (`Jigmo*.ttf`), connected ink-island & hole-contour analyzer (`_extract_ink_islands`), recursive island-to-AST partitioner (`_assign_ink_islands_to_tree`), and interactive SVG payload builder (`build_interactive_ids_svg`). |
+| [`jp_metadata.py`](jp_metadata.py) | Japanese character metadata formatter, Unicode CJK block classifier, 214 Kangxi radical dictionary (`KANGXI_RADICALS`), and radical/variant equivalence table (`⺍` `U+2E8D` ⇄ `𭕄` `U+2D544`). |
+| [`build_db.py`](build_db.py) | Offline ETL pipeline that builds `data/kanji_explorer.db` (SQLite) from `data/chise-ids/`, `data/cjkvi-ids.txt`, `data/kanjidic2.xml.gz`, `data/kanjivg.xml.gz`, `data/Unihan.zip`, and `data/EquivalentUnifiedIdeograph.txt`. |
+| [`static/index.html`](static/index.html) | 3-column application layout (Left: Interactive Canvas + Progressive Lock Bar + HUD + Attributes; Middle: Alternative IDS Selector + Recursive Decomposition Tree; Right: `ids-find` Reverse Component Lookup). |
+| [`static/styles.css`](static/styles.css) | Dark (`墨色`) & Light (`和紙`) theme styles, Mincho SVG slice/lock/hover transitions, and tree/card layout rules. |
+| [`static/app.js`](static/app.js) | Frontend state management, SVG layer & `<clipPath>` rendering, progressive click-to-lock hit-testing, multi-character word breadcrumb splitting, and bidirectional canvas/tree/reverse-lookup synchronization. |
 
 ---
 
+## Runtime & Deployment Assets
+
+To enable zero-setup deployment on PythonAnywhere and offline WSGI environments:
+
+- `data/kanji_explorer.db.gz`: Compressed SQLite database (~83 MB) containing characters, words, and component closures. Auto-extracted to `data/kanji_explorer.db` on first start.
+- `data/kanjivg.xml.gz`: KanjiVG vector stroke data (~3.5 MB) used by `glyph_service.py` to render hand-drawn stroke orders.
+- `data/chise-ids/` & `data/cjkvi-ids.txt`: CHISE and CJKVI IDS tables used by `ids_parser.py` for recursive character decomposition.
+- `data/EquivalentUnifiedIdeograph.txt`: Unicode radical equivalence table used for Kangxi radical normalization.
+- `static/fonts/Jigmo*.ttf`: Offline TrueType fonts used by both the browser and `glyph_service.py`.
+
 ## Uncommitted Local Assets (Ignored via `.gitignore`)
 
-The following large data and font files live on disk and are ignored by Git:
+The following files are generated at runtime or used only when re-running the offline ETL build pipeline:
 
-- `data/kanji_explorer.db`: Generated SQLite database (~188 MB) containing `characters`, `ids_entries`, `component_index`, and `kanji_meta`.
-- `data/chise-ids/`, `data/cjkvi-ids.txt`, `data/kanjidic2.xml.gz`, `data/kanjivg.xml.gz`, `data/Unihan.zip`, `data/EquivalentUnifiedIdeograph.txt`: Raw upstream datasets used by `build_db.py`.
-- `static/fonts/Jigmo.ttf`, `static/fonts/Jigmo2.ttf`, `static/fonts/Jigmo3.ttf`: Offline TrueType fonts (~70 MB total) used by both the browser (`@font-face`) and `glyph_service.py` (`fontTools`).
+- `data/kanji_explorer.db`, `*.db-shm`, `*.db-wal`: Extracted SQLite database files.
+- `data/kanjidic2.xml.gz`, `data/Unihan.zip`, `data/BCCWJ-LUW.zip`, `data/ja-extract.jsonl.gz`, `data/wnjpn.db.gz`: Raw datasets used only by `build_db.py` and `scripts/build_words_db.py`.
 
 ---
 
@@ -76,19 +85,19 @@ The following large data and font files live on disk and are ignored by Git:
 
 ### Start the Server
 ```bash
-python3 /home/olivier/git/kanji/server.py --port 8888
+python3 server.py --port 8888
 ```
 Then open `http://localhost:8888/` in a browser.
 
 ### Rebuild the SQLite Database (Only if changing ETL / DB schema)
 ```bash
-python3 /home/olivier/git/kanji/build_db.py
+python3 build_db.py
 ```
 
 ### Quick Verification Commands
 ```bash
 # 1. Check frontend JavaScript syntax
-node --check /home/olivier/git/kanji/static/app.js
+node --check static/app.js
 
 # 2. Test character decomposition & SVG layer generation
 curl -s "http://localhost:8888/api/char?q=%E8%9B%8D" | python3 -m json.tool | head -n 40
