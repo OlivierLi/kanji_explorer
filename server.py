@@ -630,7 +630,7 @@ def query_words_db(
     }
 
     query_sql = f"""
-    SELECT DISTINCT
+    SELECT
         w.word_id,
         w.lemma,
         w.reading,
@@ -639,10 +639,21 @@ def query_words_db(
         w.frequency_rank,
         w.frequency_tier,
         w.source,
-        wk.position_type
+        CASE MIN(CASE wk.position_type
+            WHEN 'single' THEN 1
+            WHEN 'head' THEN 2
+            WHEN 'middle' THEN 3
+            WHEN 'tail' THEN 4
+            ELSE 5 END)
+            WHEN 1 THEN 'single'
+            WHEN 2 THEN 'head'
+            WHEN 3 THEN 'middle'
+            WHEN 4 THEN 'tail'
+            ELSE 'middle' END AS position_type
     FROM word_kanji wk
     JOIN words w ON wk.word_id = w.word_id
     WHERE {where_sql}
+    GROUP BY w.word_id
     ORDER BY
         (CASE WHEN w.frequency_rank IS NULL OR w.frequency_rank <= 0 THEN 99999999 ELSE w.frequency_rank END) ASC,
         length(w.lemma) ASC,
@@ -1302,12 +1313,14 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
 
     def handle_api_glyph(self, params: dict[str, list[str]]) -> None:
         """GET /api/glyph?c=<token> -> 完全なSVGベクター画像を配信。"""
-        token = params.get("c", [""])[0].strip()
+        token = (params.get("c", [""])[0] or params.get("q", [""])[0]).strip()
         if not token:
             self._send_error_json("文字パラメータ 'c' を指定してください。", status=400)
             return
 
-        svg_content = glyph_service.get_glyph_svg(token)
+        canonical_token, _ = resolve_query(token)
+        target_token = canonical_token if canonical_token else token
+        svg_content = glyph_service.get_glyph_svg(target_token)
         svg_bytes = svg_content.encode("utf-8")
 
         self.send_response(200)

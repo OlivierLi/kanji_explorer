@@ -1,5 +1,6 @@
 """review.md に記載された全14件の不具合に対する厳密な回帰テストスイート."""
 
+import io
 from pathlib import Path
 import re
 import pytest
@@ -829,6 +830,86 @@ class TestFourthColumnWordsUI:
         assert "renderWordsGrid" in js_text
         assert "/api/words" in js_text
         assert "wordsFilter" in js_text
+
+
+class TestBugRadicalFormMapAlignment:
+    """Bug: glyph_service.RADICAL_FORM_MAP における部首対応ずれの防止."""
+
+    def test_radical_form_map_correct_associations(self):
+        # ⻗ (U+2ED7: CJK RADICAL RAIN) は「雨」と同値（「青」ではないこと）
+        rain_equivs = glyph_service.get_equivalent_symbols("⻗")
+        assert "雨" in rain_equivs
+        assert "青" not in rain_equivs
+
+        # ⻩ (U+2EE9: CJK RADICAL SIMPLIFIED YELLOW) は「黄」と同値（「麦」ではないこと）
+        yellow_equivs = glyph_service.get_equivalent_symbols("⻩")
+        assert "黄" in yellow_equivs or "黃" in yellow_equivs
+        assert "麦" not in yellow_equivs and "麥" not in yellow_equivs
+
+        # ⻨ (U+2EE8: CJK RADICAL SIMPLIFIED WHEAT) は「麦」と同値（「鹿」ではないこと）
+        wheat_equivs = glyph_service.get_equivalent_symbols("⻨")
+        assert "麦" in wheat_equivs or "麥" in wheat_equivs
+        assert "鹿" not in wheat_equivs
+
+        # ⻪ (U+2EEA: CJK RADICAL C-SIMPLIFIED FROG) は「黽」と同値（「麻」ではないこと）
+        frog_equivs = glyph_service.get_equivalent_symbols("⻪")
+        assert "黽" in frog_equivs or "黾" in frog_equivs
+        assert "麻" not in frog_equivs
+
+        # ⻈ (U+2EC8: CJK RADICAL C-SIMPLIFIED SPEECH) は「言」と同値（「谷」ではないこと）
+        speech_equivs = glyph_service.get_equivalent_symbols("⻈")
+        assert "言" in speech_equivs or "讠" in speech_equivs
+        assert "谷" not in speech_equivs
+
+        # ⺺ (U+2EBA: CJK RADICAL BRUSH ONE) は「肀/聿」と同値（「肉/月」ではないこと）
+        brush_equivs = glyph_service.get_equivalent_symbols("⺺")
+        assert "肀" in brush_equivs or "聿" in brush_equivs
+        assert "肉" not in brush_equivs
+
+
+class TestBugWordsQueryDeduplication:
+    """Bug: 同一熟語内に同一漢字が複数出現する単語（日曜日、日日 等）の重複返却防止."""
+
+    def test_query_words_no_duplicates(self):
+        conn = server.get_db_connection()
+        if conn is None:
+            pytest.skip("SQLite DBが存在しません")
+        res = server.query_words_db(conn, "日", position="all", limit=100)
+        lemmas = [r["lemma"] for r in res["results"]]
+        # 100件取得時に重複語が存在しないこと
+        assert len(lemmas) == len(set(lemmas)), f"重複単語が存在します: {[w for w in set(lemmas) if lemmas.count(w) > 1]}"
+        if "日曜日" in lemmas:
+            assert lemmas.count("日曜日") == 1
+        if "日日" in lemmas:
+            assert lemmas.count("日日") == 1
+
+
+class TestBugApiGlyphCodepointAndParam:
+    """Bug: /api/glyph における U+XXXX コードポイント表記および q パラメータの解決."""
+
+    def test_api_glyph_resolves_codepoint_and_q(self):
+        handler = server.KanjiExplorerHandler.__new__(server.KanjiExplorerHandler)
+
+        # U+86CD (蛍) のコードポイント表記指定
+        handler.send_response = lambda code: None
+        handler.send_header = lambda k, v: None
+        handler.end_headers = lambda: None
+        handler.wfile = io.BytesIO()
+
+        # q パラメータでの取得
+        handler.handle_api_glyph({"q": ["蛍"]})
+        svg_q = handler.wfile.getvalue().decode("utf-8")
+        assert "<svg" in svg_q
+        assert "path" in svg_q
+
+        # c パラメータに U+86CD を指定
+        handler.wfile = io.BytesIO()
+        handler.handle_api_glyph({"c": ["U+86CD"]})
+        svg_cp = handler.wfile.getvalue().decode("utf-8")
+        assert "<svg" in svg_cp
+        # 蛍のアウトラインが描画され、単なる "U+86CD" テキストフォールバックになっていないこと
+        assert 'transform="translate(0, 880) scale(1, -1)"' in svg_cp
+
 
 
 
