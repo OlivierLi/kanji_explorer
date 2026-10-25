@@ -1,0 +1,24 @@
+[run]
+branch = True
+source =
+    ids_parser
+    glyph_service
+    server
+omit =
+    tests/*
+    scripts/*
+    build_db.py
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__.:
+    raise NotImplementedError
+    except ImportError:
+
+[html]
+directory = coverage_html

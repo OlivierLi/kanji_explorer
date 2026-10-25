@@ -1,0 +1,173 @@
+[
+  {
+    "char": "巣",
+    "description": "巣 (⿱𭕄果) の果(⿻日木)内部「一」(0.1.0.1) のインク占有率と境界検証",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "𭕄",
+        "min_ink_share": 0.05,
+        "max_ink_share": 0.25,
+        "max_y2": 0.28
+      },
+      {
+        "path": "0.1",
+        "component": "果",
+        "min_ink_share": 0.65,
+        "max_ink_share": 0.95
+      },
+      {
+        "path": "0.1.0",
+        "component": "日",
+        "min_ink_share": 0.30,
+        "max_ink_share": 0.58,
+        "max_y2": 0.60
+      },
+      {
+        "path": "0.1.0.1",
+        "component": "一",
+        "min_ink_share": 0.05,
+        "max_ink_share": 0.20,
+        "max_h": 0.14,
+        "max_y2": 0.46
+      },
+      {
+        "path": "0.1.1",
+        "component": "木",
+        "min_ink_share": 0.35,
+        "max_ink_share": 0.65,
+        "min_y1": 0.45
+      }
+    ]
+  },
+  {
+    "char": "果",
+    "description": "果 (⿻日木) の日と木の上下インク分離",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "日",
+        "min_ink_share": 0.35,
+        "max_ink_share": 0.58,
+        "max_y2": 0.50
+      },
+      {
+        "path": "0.0.1",
+        "component": "一",
+        "min_ink_share": 0.05,
+        "max_ink_share": 0.20,
+        "max_h": 0.14,
+        "max_y2": 0.32
+      },
+      {
+        "path": "0.1",
+        "component": "木",
+        "min_ink_share": 0.45,
+        "max_ink_share": 0.70,
+        "min_y1": 0.30
+      }
+    ]
+  },
+  {
+    "char": "筒",
+    "description": "筒 (⿱竹同) の竹と同の外枠非強奪インク比率",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "竹",
+        "min_ink_share": 0.18,
+        "max_ink_share": 0.40,
+        "max_y2": 0.36
+      },
+      {
+        "path": "0.1",
+        "component": "同",
+        "min_ink_share": 0.55,
+        "max_ink_share": 0.85,
+        "min_y1": 0.25
+      }
+    ]
+  },
+  {
+    "char": "墓",
+    "description": "墓 (⿱莫土) の莫と土のインク配分 (莫が過半占有)",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "莫",
+        "min_ink_share": 0.65,
+        "max_ink_share": 0.90
+      },
+      {
+        "path": "0.1",
+        "component": "土",
+        "min_ink_share": 0.10,
+        "max_ink_share": 0.35,
+        "min_y1": 0.55
+      }
+    ]
+  },
+  {
+    "char": "班",
+    "description": "班 (⿴玨刂) の両脇王と中央刂の分離",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "両脇",
+        "min_ink_share": 0.60,
+        "max_ink_share": 0.90
+      },
+      {
+        "path": "0.1",
+        "component": "刂",
+        "min_ink_share": 0.10,
+        "max_ink_share": 0.35
+      }
+    ]
+  },
+  {
+    "char": "近",
+    "description": "近 (⿺辶斤) の辶と斤のインク非欠落",
+    "checks": [
+      {
+        "path": "0.0",
+        "component": "辶",
+        "min_ink_share": 0.35,
+        "max_ink_share": 0.75
+      },
+      {
+        "path": "0.1",
+        "component": "斤",
+        "min_ink_share": 0.30,
+        "max_ink_share": 0.70
+      }
+    ]
+  },
+  {
+    "char": "鰻",
+    "description": "鰻 (⿰魚曼) の曼(⿱&CDP-8CBF;又)内部「⺫」(0.1.0.1) と「又」(0.1.1) のインク空隙境界スナップ・完全保持",
+    "checks": [
+      {
+        "path": "0.1",
+        "component": "曼",
+        "min_ink_share": 0.50,
+        "max_ink_share": 0.68
+      },
+      {
+        "path": "0.1.0.1",
+        "component": "⺫",
+        "min_ink_share": 0.18,
+        "max_ink_share": 0.26,
+        "min_y1": 0.30,
+        "max_y2": 0.60
+      },
+      {
+        "path": "0.1.1",
+        "component": "又",
+        "min_ink_share": 0.16,
+        "max_ink_share": 0.26,
+        "min_y1": 0.56
+      }
+    ]
+  }
+]

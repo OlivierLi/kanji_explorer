@@ -1,0 +1,45 @@
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage_html/
+
+# SQLite databases & journals
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Downloaded datasets & build artifacts (keep compressed database)
+data/*
+!data/kanji_explorer.db.gz
+
+# Screenshots, logs, and OS files
+Screenshot_*.png
+screenshot_*.png
+*.log
+.DS_Store
+Thumbs.db
+
+# Fuzzing and audit generated outputs
+fuzz_report/
+audit_visuals/
+
+# Node.js
+node_modules/
+package.json
+package-lock.json
+
+# Scratch & temporary comparison files
+test_*.html
+test_*.svg
+compare_*.html

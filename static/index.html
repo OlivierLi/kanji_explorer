@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>漢字構造・部首ドリルダウン探索器</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+  <!-- アプリケーションヘッダー -->
+  <header class="app-header">
+    <div class="header-top">
+      <div class="app-title-group">
+        <h1 class="app-title">
+          <span class="app-title-icon">漢</span>
+          漢字構造・部首ドリルダウン探索器
+        </h1>
+        <p class="app-subtitle">CHISE IDS · GlyphWiki · KanjiVG 統合精密データベース</p>
+      </div>
+
+      <div class="header-controls">
+        <button id="themeToggleBtn" class="theme-toggle-btn" title="明暗外観テーマを切り替えます">
+          <span class="theme-icon">◐</span>
+          <span id="themeToggleText">外観: 明色</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 統合検索バー -->
+    <div class="search-bar-container">
+      <div class="search-input-wrapper">
+        <input 
+          type="text" 
+          id="mainSearchInput" 
+          class="search-input" 
+          placeholder="漢字・構成部品・Unicode (例: 蛍, 𭕄, U+2D544, ほたる) を入力..." 
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+      <button id="btnInspect" class="btn-primary" title="入力した文字の構造・属性を調査します">
+        <span>文字を調査</span>
+      </button>
+      <button id="btnFind" class="btn-secondary" title="この部品を含む漢字を逆引き検索します">
+        <span>部品を含む漢字を検索 (ids-find)</span>
+      </button>
+    </div>
+
+    <!-- クイック探索プリセット -->
+    <div class="presets-bar">
+      <span class="presets-label">探索例:</span>
+      <button class="preset-chip highlight" data-kanji="蛍" data-drilldown="蛍,𰃮,𭕄">
+        蛍 → 𰃮 → 𭕄（段階展開）
+      </button>
+      <button class="preset-chip" data-kanji="𭕄">𭕄（単体逆引き）</button>
+      <button class="preset-chip" data-kanji="𰃮">𰃮</button>
+      <button class="preset-chip" data-kanji="学">学</button>
+      <button class="preset-chip" data-kanji="栄">栄</button>
+      <button class="preset-chip" data-kanji="単">単</button>
+      <button class="preset-chip" data-kanji="巣">巣</button>
+      <button class="preset-chip" data-kanji="厳">厳</button>
+      <button class="preset-chip" data-kanji="獣">獣</button>
+      <button class="preset-chip" data-kanji="脳">脳</button>
+      <button class="preset-chip" data-kanji="桜">桜</button>
+      <button class="preset-chip" data-kanji="鬱">鬱</button>
+      <button class="preset-chip" data-kanji="龍">龍</button>
+      <button class="preset-chip" data-kanji="𭸼">𭸼</button>
+    </div>
+  </header>
+
+  <!-- ドリルダウン履歴パンくずリスト -->
+  <nav class="breadcrumbs-bar" aria-label="探索履歴">
+    <div class="breadcrumbs-trail" id="breadcrumbsTrail">
+      <span class="breadcrumb-label">探索履歴:</span>
+      <!-- パンくず項目が動的に生成されます -->
+    </div>
+    <div class="breadcrumbs-nav-buttons">
+      <button id="btnHistoryBack" class="btn-nav-history" title="直前の文字に戻ります" disabled>◀ 戻る</button>
+      <button id="btnHistoryForward" class="btn-nav-history" title="進みます" disabled>進む ▶</button>
+      <button id="btnHistoryClear" class="btn-nav-history" title="探索履歴を初期化します">履歴消去</button>
+    </div>
+  </nav>
+
+  <!-- 3カラムメインワークスペース -->
+  <main class="main-workspace">
+
+    <!-- ==================== 左カラム: 文字構造分解キャンバス ==================== -->
+    <section class="workspace-column" id="columnLeft">
+      <div class="column-header">
+        <h2 class="column-title">
+          <span>字形分解キャンバス</span>
+        </h2>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <div class="display-mode-selector">
+            <button type="button" id="btnModeKvg" class="btn-mode active" title="筆画表示（KanjiVGベクター）">筆画</button>
+            <button type="button" id="btnModeMincho" class="btn-mode" title="印刷書体表示（明朝体）">明朝</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="column-content">
+        <!-- 段階的ロック階層探索コントローラー -->
+        <div class="depth-controller" id="depthController">
+          <div class="depth-controller-header">
+            <div class="depth-status-info">
+              <span class="depth-status-label">探索階層:</span>
+              <span class="depth-status-badge" id="depthStatusBadge">第1階層（直接構成）</span>
+            </div>
+            <div class="depth-action-buttons">
+              <button type="button" class="btn-depth-step-up" id="btnLockStepUp" title="1つ上の階層へ戻ります" disabled>◀ 階層を戻る</button>
+              <button type="button" class="btn-depth-reset" id="btnResetLock" title="選択固定を解除して第1階層へ戻します" disabled>選択解除</button>
+            </div>
+          </div>
+          <div class="depth-lock-trail" id="depthLockTrail">
+            <span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定展開、リセットで解除</span>
+          </div>
+        </div>
+
+        <!-- キャンバス描画ステージ（方眼紙・九宮格） -->
+        <div class="canvas-stage-wrapper" id="canvasStageWrapper">
+          <div class="canvas-grid-overlay"></div>
+          <div class="canvas-svg-container" id="canvasSvgContainer">
+            <!-- 明朝体SVGが動的に描画されます -->
+          </div>
+        </div>
+
+        <!-- リアルタイム・ホバー情報HUD -->
+        <div class="hover-hud" id="hoverHud">
+          <div class="hud-glyph-box" id="hudGlyphBox">蛍</div>
+          <div class="hud-details">
+            <div class="hud-title-row">
+              <span class="hud-char-name" id="hudCharName">蛍（全体）</span>
+              <span class="hud-codepoint" id="hudCodepoint">U+86CD</span>
+              <span class="hud-raw-orig" id="hudRawOrig"></span>
+            </div>
+            <div class="hud-trail" id="hudTrail">階層パス: 0 [役割: 全体]</div>
+            <div class="hud-hint" id="hudHint">※ 部品ホバーで字形確認 / クリックで選択・逆引き検索</div>
+          </div>
+        </div>
+
+        <!-- 漢字属性・字書情報カード -->
+        <div class="attribute-card" id="attributeCard">
+          <div class="attribute-card-title">
+            <span>漢字属性・字書情報</span>
+            <span id="attrCharCodepoint">U+86CD</span>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-key">文字コード / ブロック</span>
+              <span class="meta-val">
+                <span id="attrCodepoint">U+86CD</span>
+                <span id="attrTierBadge" class="badge badge-tier-basic">基本漢字</span>
+              </span>
+            </div>
+
+            <div class="meta-item">
+              <span class="meta-key">総画数 / 部首</span>
+              <span class="meta-val" id="attrStrokesRadical">11画 / 虫（むし・むしへん）[142]</span>
+            </div>
+
+            <div class="meta-item">
+              <span class="meta-key">音読み</span>
+              <span class="meta-val" id="attrOnReadings">ケイ</span>
+            </div>
+
+            <div class="meta-item">
+              <span class="meta-key">訓読み</span>
+              <span class="meta-val" id="attrKunReadings">ほたる</span>
+            </div>
+
+            <div class="meta-item" style="grid-column: span 2;">
+              <span class="meta-key">漢字種別バッジ</span>
+              <span class="meta-val" id="attrBadges">
+                <span class="badge badge-grade">教育漢字（小学4年）</span>
+                <span class="badge badge-grade">常用漢字</span>
+              </span>
+            </div>
+
+            <div class="meta-item" style="grid-column: span 2;">
+              <span class="meta-key">辞書参照コード</span>
+              <span class="meta-val" id="attrDictCodes" style="font-size: 0.75rem;">
+                大漢和: 33140 | 四隅: 9013.6 | SKIP: 2-2-9 | 倉頡: FBLMI | MJ文字: MJ022987
+              </span>
+            </div>
+
+            <div class="meta-item" style="grid-column: span 2;">
+              <span class="meta-key">同等部品・異体字</span>
+              <div class="equivalents-list" id="attrEquivalents">
+                <!-- 同等部品チップ -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==================== 中央カラム: 構造分解ツリー ==================== -->
+    <section class="workspace-column" id="columnCenter">
+      <div class="column-header">
+        <h2 class="column-title">
+          <span>階層構造ツリー</span>
+        </h2>
+        <span class="column-title-badge">下位分解</span>
+      </div>
+
+      <div class="column-content">
+        <!-- 構造切替セレクター -->
+        <div class="structure-selector" id="structureSelector">
+          <!-- 構造候補タブ -->
+        </div>
+
+        <!-- IDS 記述文字列バー -->
+        <div class="ids-sequence-card">
+          <span class="ids-sequence-label">IDS記述:</span>
+          <div id="idsTokensContainer" style="display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+            <!-- トークンチップ -->
+          </div>
+        </div>
+
+        <!-- 再帰的分解ツリービュー -->
+        <div class="tree-container" id="treeContainer">
+          <!-- 再帰的ツリーカード -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 右カラム: 包含漢字・逆引き探索 ==================== -->
+    <section class="workspace-column" id="columnRight">
+      <div class="column-header">
+        <h2 class="column-title">
+          <span>包含漢字逆引き探索（ids-find）</span>
+        </h2>
+        <span class="column-title-badge">上位検索</span>
+      </div>
+
+      <div class="column-content">
+        <!-- 複数部品アンド検索ボックス -->
+        <div class="find-search-box">
+          <div class="chips-input-container" id="findChipsContainer">
+            <!-- 選択された部品チップ -->
+            <input 
+              type="text" 
+              id="findComponentInput" 
+              class="find-input" 
+              placeholder="＋部品を追加して絞り込み（Enterで確定）..." 
+              autocomplete="off"
+            >
+          </div>
+
+          <div class="find-actions-row">
+            <span class="find-guide-hint">
+              <span class="find-guide-icon">💡</span> 部品クリックで検索連動
+            </span>
+            <button id="btnClearFindChips" class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">
+              全解除
+            </button>
+          </div>
+
+          <!-- フィルタコントロール群 -->
+          <div class="find-filters-group">
+            <div class="filter-row">
+              <span class="filter-label">階層絞込:</span>
+              <select id="filterHierarchy" class="filter-select">
+                <option value="all">すべて</option>
+                <option value="direct">直接含む（第1階層）</option>
+                <option value="indirect">間接含む（階層検索）</option>
+              </select>
+
+              <span class="filter-label" style="margin-left: 8px;">文字種別:</span>
+              <select id="filterCategory" class="filter-select">
+                <option value="all">すべて</option>
+                <option value="joyo">常用・人名</option>
+                <option value="bmp">基本漢字 (BMP)</option>
+                <option value="ext">拡張A〜J</option>
+                <option value="gaiji">外字 (CDP/GT)</option>
+              </select>
+            </div>
+
+            <div class="filter-row">
+              <span class="filter-label">画数範囲:</span>
+              <div class="stroke-range-group">
+                <input type="number" id="filterStrokeMin" class="stroke-input" placeholder="最小" min="1" max="64">
+                <span>〜</span>
+                <input type="number" id="filterStrokeMax" class="stroke-input" placeholder="最大" min="1" max="64">
+                <span>画</span>
+              </div>
+              <button id="btnApplyFind" class="btn-primary" style="margin-left: auto; padding: 4px 12px; font-size: 0.78rem;">
+                検索実行
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 結果集計ヘッダー -->
+        <div class="results-summary-bar">
+          <span id="resultsCountLabel">
+            該当漢字: <span class="results-count-highlight" id="resultsTotalCount">0</span> 件
+            （直接: <span id="resultsDirectCount">0</span> 件 ／ 間接: <span id="resultsIndirectCount">0</span> 件）
+          </span>
+        </div>
+
+        <!-- 結果一覧グリッド / リスト -->
+        <div class="results-grid" id="resultsGrid">
+          <!-- 逆引き結果カード群 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 第4カラム: 収録熟語・語彙（国語辞典） ==================== -->
+    <section class="workspace-column" id="columnWords">
+      <div class="column-header">
+        <h2 class="column-title">
+          <span>収録熟語・語彙（国語辞典）</span>
+        </h2>
+        <span class="column-title-badge" id="wordsTotalBadge">0語</span>
+      </div>
+
+      <div class="column-content">
+        <!-- 熟語検索・フィルタボックス -->
+        <div class="words-search-box">
+          <div class="words-input-wrapper">
+            <input 
+              type="text" 
+              id="wordsKeywordInput" 
+              class="words-input" 
+              placeholder="＋熟語・語釈のキーワードで絞り込み..." 
+              autocomplete="off"
+            >
+          </div>
+
+          <div class="words-actions-row">
+            <span class="words-guide-hint">
+              <span class="words-guide-icon">📖</span> 頻度降順・国語辞書語釈
+            </span>
+            <button id="btnClearWordsFilter" class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">
+              条件解除
+            </button>
+          </div>
+
+          <!-- フィルタコントロール群 -->
+          <div class="words-filters-group">
+            <div class="filter-row">
+              <span class="filter-label">出現位置:</span>
+              <select id="filterWordPosition" class="filter-select">
+                <option value="all">すべて</option>
+                <option value="head">語頭（前）</option>
+                <option value="middle">語中</option>
+                <option value="tail">語尾（後）</option>
+                <option value="single">単独</option>
+              </select>
+
+              <span class="filter-label" style="margin-left: 8px;">頻度区分:</span>
+              <select id="filterWordTier" class="filter-select">
+                <option value="all">すべて</option>
+                <option value="top">最頻出（日常最重要）</option>
+                <option value="high">頻出以上（日常語）</option>
+                <option value="general">一般以上</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 結果集計ヘッダー -->
+        <div class="results-summary-bar words-summary-bar">
+          <span id="wordsCountLabel">
+            収録熟語: <span class="results-count-highlight" id="wordsTotalCount">0</span> 語
+            （最頻出: <span id="wordsTopCount">0</span> 語 ／ 頻出: <span id="wordsHighCount">0</span> 語）
+          </span>
+        </div>
+
+        <!-- 熟語一覧グリッド / リスト -->
+        <div class="words-grid" id="wordsGrid">
+          <!-- 熟語カード群が動的に描画されます -->
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
