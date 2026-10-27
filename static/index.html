@@ -51,9 +51,9 @@
     <div class="presets-bar">
       <span class="presets-label">探索例:</span>
       <button class="preset-chip highlight" data-kanji="蛍" data-drilldown="蛍,𰃮,𭕄">
-        蛍 → 𰃮 → 𭕄（段階展開）
+        蛍 → 𰃮 → 𭕄(段階展開)
       </button>
-      <button class="preset-chip" data-kanji="𭕄">𭕄（単体逆引き）</button>
+      <button class="preset-chip" data-kanji="𭕄">𭕄(単体逆引き)</button>
       <button class="preset-chip" data-kanji="𰃮">𰃮</button>
       <button class="preset-chip" data-kanji="学">学</button>
       <button class="preset-chip" data-kanji="栄">栄</button>
@@ -77,7 +77,7 @@
     </div>
     <div class="breadcrumbs-nav-buttons">
       <button id="btnHistoryBack" class="btn-nav-history" title="直前の文字に戻ります" disabled>◀ 戻る</button>
-      <button id="btnHistoryForward" class="btn-nav-history" title="進みます" disabled>進む ▶</button>
+      <button id="btnHistoryForward" class="btn-nav-history" title="次の文字へ進みます" disabled>進む ▶</button>
       <button id="btnHistoryClear" class="btn-nav-history" title="探索履歴を初期化します">履歴消去</button>
     </div>
   </nav>
@@ -93,8 +93,8 @@
         </h2>
         <div style="display: flex; gap: 6px; align-items: center;">
           <div class="display-mode-selector">
-            <button type="button" id="btnModeKvg" class="btn-mode active" title="筆画表示（KanjiVGベクター）">筆画</button>
-            <button type="button" id="btnModeMincho" class="btn-mode" title="印刷書体表示（明朝体）">明朝</button>
+            <button type="button" id="btnModeKvg" class="btn-mode active" title="筆画表示(KanjiVGベクター)">筆画</button>
+            <button type="button" id="btnModeMincho" class="btn-mode" title="印刷書体表示(明朝体)">明朝</button>
           </div>
         </div>
       </div>
@@ -105,7 +105,7 @@
           <div class="depth-controller-header">
             <div class="depth-status-info">
               <span class="depth-status-label">探索階層:</span>
-              <span class="depth-status-badge" id="depthStatusBadge">第1階層（直接構成）</span>
+              <span class="depth-status-badge" id="depthStatusBadge">第1階層(直接構成)</span>
             </div>
             <div class="depth-action-buttons">
               <button type="button" class="btn-depth-step-up" id="btnLockStepUp" title="1つ上の階層へ戻ります" disabled>◀ 階層を戻る</button>
@@ -113,7 +113,7 @@
             </div>
           </div>
           <div class="depth-lock-trail" id="depthLockTrail">
-            <span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定展開、リセットで解除</span>
+            <span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定展開、「選択解除」で解除</span>
           </div>
         </div>
 
@@ -130,7 +130,7 @@
           <div class="hud-glyph-box" id="hudGlyphBox">蛍</div>
           <div class="hud-details">
             <div class="hud-title-row">
-              <span class="hud-char-name" id="hudCharName">蛍（全体）</span>
+              <span class="hud-char-name" id="hudCharName">蛍(全体)</span>
               <span class="hud-codepoint" id="hudCodepoint">U+86CD</span>
               <span class="hud-raw-orig" id="hudRawOrig"></span>
             </div>
@@ -157,7 +157,7 @@
 
             <div class="meta-item">
               <span class="meta-key">総画数 / 部首</span>
-              <span class="meta-val" id="attrStrokesRadical">11画 / 虫（むし・むしへん）[142]</span>
+              <span class="meta-val" id="attrStrokesRadical">11画 / 虫(むし・むしへん) [142]</span>
             </div>
 
             <div class="meta-item">
@@ -173,7 +173,7 @@
             <div class="meta-item" style="grid-column: span 2;">
               <span class="meta-key">漢字種別バッジ</span>
               <span class="meta-val" id="attrBadges">
-                <span class="badge badge-grade">教育漢字（小学4年）</span>
+                <span class="badge badge-grade">教育漢字(小学4年)</span>
                 <span class="badge badge-grade">常用漢字</span>
               </span>
             </div>
@@ -181,7 +181,7 @@
             <div class="meta-item" style="grid-column: span 2;">
               <span class="meta-key">辞書参照コード</span>
               <span class="meta-val" id="attrDictCodes" style="font-size: 0.75rem;">
-                大漢和: 33140 | 四隅: 9013.6 | SKIP: 2-2-9 | 倉頡: FBLMI | MJ文字: MJ022987
+                大漢和: 33140 | 四角号碼: 9013.6 | SKIP: 2-2-9 | 倉頡: FBLMI | MJ文字: MJ022987
               </span>
             </div>
 
@@ -231,7 +231,7 @@
     <section class="workspace-column" id="columnRight">
       <div class="column-header">
         <h2 class="column-title">
-          <span>包含漢字逆引き探索（ids-find）</span>
+          <span>包含漢字逆引き探索(ids-find)</span>
         </h2>
         <span class="column-title-badge">上位検索</span>
       </div>
@@ -245,7 +245,7 @@
               type="text" 
               id="findComponentInput" 
               class="find-input" 
-              placeholder="＋部品を追加して絞り込み（Enterで確定）..." 
+              placeholder="＋部品を追加して絞り込み(Enterで確定)..." 
               autocomplete="off"
             >
           </div>
@@ -265,8 +265,8 @@
               <span class="filter-label">階層絞込:</span>
               <select id="filterHierarchy" class="filter-select">
                 <option value="all">すべて</option>
-                <option value="direct">直接含む（第1階層）</option>
-                <option value="indirect">間接含む（階層検索）</option>
+                <option value="direct">直接含む(第1階層)</option>
+                <option value="indirect">間接的に含む(階層検索)</option>
               </select>
 
               <span class="filter-label" style="margin-left: 8px;">文字種別:</span>
@@ -298,7 +298,7 @@
         <div class="results-summary-bar">
           <span id="resultsCountLabel">
             該当漢字: <span class="results-count-highlight" id="resultsTotalCount">0</span> 件
-            （直接: <span id="resultsDirectCount">0</span> 件 ／ 間接: <span id="resultsIndirectCount">0</span> 件）
+            (直接: <span id="resultsDirectCount">0</span> 件 ／ 間接: <span id="resultsIndirectCount">0</span> 件)
           </span>
         </div>
 
@@ -313,7 +313,7 @@
     <section class="workspace-column" id="columnWords">
       <div class="column-header">
         <h2 class="column-title">
-          <span>収録熟語・語彙（国語辞典）</span>
+          <span>収録熟語・語彙(国語辞典)</span>
         </h2>
         <span class="column-title-badge" id="wordsTotalBadge">0語</span>
       </div>
@@ -333,7 +333,7 @@
 
           <div class="words-actions-row">
             <span class="words-guide-hint">
-              <span class="words-guide-icon">📖</span> 頻度降順・国語辞書語釈
+              <span class="words-guide-icon">📖</span> 頻度降順・国語辞典語釈
             </span>
             <button id="btnClearWordsFilter" class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;">
               条件解除
@@ -346,17 +346,17 @@
               <span class="filter-label">出現位置:</span>
               <select id="filterWordPosition" class="filter-select">
                 <option value="all">すべて</option>
-                <option value="head">語頭（前）</option>
+                <option value="head">語頭(前)</option>
                 <option value="middle">語中</option>
-                <option value="tail">語尾（後）</option>
+                <option value="tail">語尾(後)</option>
                 <option value="single">単独</option>
               </select>
 
               <span class="filter-label" style="margin-left: 8px;">頻度区分:</span>
               <select id="filterWordTier" class="filter-select">
                 <option value="all">すべて</option>
-                <option value="top">最頻出（日常最重要）</option>
-                <option value="high">頻出以上（日常語）</option>
+                <option value="top">最頻出(日常最重要)</option>
+                <option value="high">頻出以上(日常語)</option>
                 <option value="general">一般以上</option>
               </select>
             </div>
@@ -367,7 +367,7 @@
         <div class="results-summary-bar words-summary-bar">
           <span id="wordsCountLabel">
             収録熟語: <span class="results-count-highlight" id="wordsTotalCount">0</span> 語
-            （最頻出: <span id="wordsTopCount">0</span> 語 ／ 頻出: <span id="wordsHighCount">0</span> 語）
+            (最頻出: <span id="wordsTopCount">0</span> 語 ／ 頻出: <span id="wordsHighCount">0</span> 語)
           </span>
         </div>
 

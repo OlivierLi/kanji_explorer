@@ -270,7 +270,7 @@ def row_to_meta(row: sqlite3.Row, requested_char: str) -> dict[str, Any]:
         }
         meta["radical"] = f"{rad_info['name']} [{rad_num}]"
     elif rad_num:
-        meta["radical"] = f"第{rad_num}部首"
+        meta["radical"] = f"第{rad_num}部"
 
     grade = row["grade"] if "grade" in keys else None
     jlpt = row["jlpt"] if "jlpt" in keys else None
@@ -840,10 +840,10 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             '<html lang="ja">\n'
             "<head>\n"
             '  <meta charset="utf-8">\n'
-            "  <title>漢字構造エクスプローラー</title>\n"
+            "  <title>漢字構造・部首ドリルダウン探索器</title>\n"
             "</head>\n"
             "<body>\n"
-            "  <h1>漢字構造エクスプローラー API サーバー</h1>\n"
+            "  <h1>漢字構造・部首ドリルダウン探索器 API サーバー</h1>\n"
             "  <p>サーバーは正常に稼働しています。以下のAPIエンドポイントをご利用いただけます:</p>\n"
             "  <ul>\n"
             '    <li><code>/api/character?c=蛍</code>: 漢字詳細および構成木・メタデータ取得</li>\n'
@@ -1304,7 +1304,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         self._send_json_response({
             "query": raw_query,
             "components": norm_components,
-            "search_type": "構成要素検索（インメモリ）",
+            "search_type": "構成要素検索(インメモリ)",
             "total": len(matched_chars),
             "direct_total": len(matched_chars),
             "indirect_total": 0,
@@ -1520,7 +1520,7 @@ def run_internal_self_tests() -> bool:
         with urllib.request.urlopen(f"{base_url}/") as resp:
             assert resp.status == 200
             assert "text/html" in resp.headers.get("Content-Type", "")
-            print("✓ GET /: 正常（HTML配信成功）")
+            print("✓ GET /: 正常(HTML配信成功)")
 
         # 2. GET /static/styles.css 及び /static/fonts/Jigmo.ttf
         with urllib.request.urlopen(f"{base_url}/static/styles.css") as resp:
@@ -1529,7 +1529,7 @@ def run_internal_self_tests() -> bool:
             assert "max-age=3600" in resp.headers.get("Cache-Control", "")
             css_data = resp.read()
             assert len(css_data) > 0
-            print("✓ GET /static/styles.css: 正常（MIMEタイプ・キャッシュヘッダー合致）")
+            print("✓ GET /static/styles.css: 正常(MIMEタイプ・キャッシュヘッダー合致)")
 
         with urllib.request.urlopen(f"{base_url}/static/fonts/Jigmo.ttf") as resp:
             assert resp.status == 200
@@ -1537,7 +1537,7 @@ def run_internal_self_tests() -> bool:
             assert "max-age=3600" in resp.headers.get("Cache-Control", "")
             font_chunk = resp.read(8192)
             assert len(font_chunk) > 0
-            print("✓ GET /static/fonts/Jigmo.ttf: 正常（MIMEタイプ・キャッシュヘッダー合致）")
+            print("✓ GET /static/fonts/Jigmo.ttf: 正常(MIMEタイプ・キャッシュヘッダー合致)")
 
         # 3. GET /api/glyph
         for glyph_c in ["蛍", "𰃮", "𭕄", "&CDP-8BD9;"]:
@@ -1547,7 +1547,7 @@ def run_internal_self_tests() -> bool:
                 assert "image/svg+xml" in resp.headers.get("Content-Type", "")
                 data = resp.read().decode("utf-8")
                 assert "<svg" in data and "</svg>" in data
-                print(f"✓ GET /api/glyph?c={glyph_c}: 正常（SVG長={len(data)}）")
+                print(f"✓ GET /api/glyph?c={glyph_c}: 正常(SVG長={len(data)})")
 
         # 4. GET /api/char?q=蛍
         with urllib.request.urlopen(f"{base_url}/api/char?q={urllib.parse.quote('蛍')}") as resp:
@@ -1568,7 +1568,7 @@ def run_internal_self_tests() -> bool:
             assert visual.get("has_kanjivg") is True
             assert visual.get("interactive_svg", {}).get("base_path") is not None
             assert len(visual.get("interactive_svg", {}).get("component_layers", [])) >= 3
-            print("✓ GET /api/char?q=蛍: 正常（メタデータ・木構造・KanjiVG・インタラクティブSVG合致）")
+            print("✓ GET /api/char?q=蛍: 正常(メタデータ・木構造・KanjiVG・インタラクティブSVG合致)")
 
         # 5. GET /api/character?c=蛍 (新ルート /api/character & c= パラメータ検証)
         with urllib.request.urlopen(f"{base_url}/api/character?c={urllib.parse.quote('蛍')}") as resp:
@@ -1585,7 +1585,7 @@ def run_internal_self_tests() -> bool:
             if usage.get("direct"):
                 d0 = usage["direct"][0]
                 assert "literal" in d0 and "ids" in d0 and "readings" in d0 and "via" in d0
-            print("✓ GET /api/character?c=蛍: 正常（/api/character ルーティング・c=受容・拡張スキーマ合致）")
+            print("✓ GET /api/character?c=蛍: 正常(/api/character ルーティング・c=受容・拡張スキーマ合致)")
 
         # 6. GET /api/character?c=⺍ (U+2E8D 正規化 & c= パラメータ検証)
         with urllib.request.urlopen(f"{base_url}/api/character?c={urllib.parse.quote('⺍')}") as resp:
@@ -1594,7 +1594,7 @@ def run_internal_self_tests() -> bool:
             meta = c_data.get("meta", {})
             assert meta.get("char") == "𭕄" and meta.get("literal") == "𭕄", f"期待値 '𭕄' ですが '{meta.get('char')}' でした。"
             assert meta.get("requested_char") == "⺍"
-            print("✓ GET /api/character?c=⺍: 正常（'⺍' -> '𭕄' 正規化合致）")
+            print("✓ GET /api/character?c=⺍: 正常('⺍' -> '𭕄' 正規化合致)")
 
         # 7. GET /api/char?q=U+300EE (コードポイント表記解決 & 拡張領域文字)
         with urllib.request.urlopen(f"{base_url}/api/char?q=U+300EE") as resp:
@@ -1603,7 +1603,7 @@ def run_internal_self_tests() -> bool:
             meta = c_data.get("meta", {})
             assert meta.get("char") == "𰃮"
             assert c_data.get("visual", {}).get("interactive_svg", {}).get("base_path") is not None
-            print("✓ GET /api/char?q=U+300EE: 正常（'𰃮' 拡張G文字解決＆インタラクティブSVG生成合致）")
+            print("✓ GET /api/char?q=U+300EE: 正常('𰃮' 拡張G文字解決＆インタラクティブSVG生成合致)")
 
         # 8. GET /api/ids-find?components=𭕄&components=虫&hierarchy=indirect&category=all (複数 components, hierarchy=indirect, category 検証)
         with urllib.request.urlopen(
@@ -1627,7 +1627,7 @@ def run_internal_self_tests() -> bool:
             assert hotaru.get("readings") == "ケイ / ほたる"
             assert hotaru.get("ids") == "⿱𰃮虫"
             assert hotaru.get("codepoint") == "U+86CD"
-            print("✓ GET /api/ids-find?components=𭕄&components=虫&hierarchy=indirect&category=all: 正常（複数components・indirect階層・蛍抽出・スキーマ合致）")
+            print("✓ GET /api/ids-find?components=𭕄&components=虫&hierarchy=indirect&category=all: 正常(複数components・indirect階層・蛍抽出・スキーマ合致)")
 
         # 9. GET /api/ids-find?components=𭕄&hierarchy=direct (直接構成要素フィルター検証)
         with urllib.request.urlopen(
@@ -1640,7 +1640,7 @@ def run_internal_self_tests() -> bool:
             assert find_direct.get("total") == 45
             assert len(find_direct.get("results", [])) > 0
             assert all(r.get("is_direct") == 1 for r in find_direct["results"])
-            print("✓ GET /api/ids-find?components=𭕄&hierarchy=direct: 正常（direct_total=45, indirect_total=225, 全件is_direct=1）")
+            print("✓ GET /api/ids-find?components=𭕄&hierarchy=direct: 正常(direct_total=45, indirect_total=225, 全件is_direct=1)")
 
         # 10. GET /api/ids-find?q=ほたる (読み検索検証)
         with urllib.request.urlopen(
@@ -1653,7 +1653,7 @@ def run_internal_self_tests() -> bool:
             assert read_data.get("direct_total") == read_data.get("total")
             r0 = read_data["results"][0]
             assert "literal" in r0 and "readings" in r0 and "ids" in r0 and "is_direct" in r0
-            print(f"✓ GET /api/ids-find?q=ほたる: 正常（読み検索総数={read_data.get('total')}、スキーマ合致）")
+            print(f"✓ GET /api/ids-find?q=ほたる: 正常(読み検索総数={read_data.get('total')}、スキーマ合致)")
 
     except Exception as e:
         import traceback
@@ -1675,18 +1675,18 @@ def run_internal_self_tests() -> bool:
 
 def main() -> None:
     """メイン実行関数。"""
-    parser = argparse.ArgumentParser(description="漢字構造エクスプローラー Webサーバー")
+    parser = argparse.ArgumentParser(description="漢字構造・部首ドリルダウン探索器 Webサーバー")
     parser.add_argument(
         "--port",
         type=int,
         default=int(os.environ.get("PORT", "8888")),
-        help="待受ポート番号（デフォルト: 8888 または 環境変数 PORT）",
+        help="待受ポート番号(デフォルト: 8888 または 環境変数 PORT)",
     )
     parser.add_argument(
         "--host",
         type=str,
         default="0.0.0.0",
-        help="バインドアドレス（デフォルト: 0.0.0.0）",
+        help="バインドアドレス(デフォルト: 0.0.0.0)",
     )
     parser.add_argument(
         "--test",
@@ -1702,9 +1702,9 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), KanjiExplorerHandler)
     print("=" * 60)
-    print(f"【サーバー起動】漢字構造エクスプローラーサーバーが起動しました。")
+    print(f"【サーバー起動】漢字構造・部首ドリルダウン探索器サーバーが起動しました。")
     print(f" - URL: http://{args.host}:{args.port}/")
-    print(f" - データベース: {DB_PATH} ({'接続可能' if DB_PATH.is_file() else '未配備（インメモリフォールバックモード）'})")
+    print(f" - データベース: {DB_PATH} ({'接続可能' if DB_PATH.is_file() else '未配備(インメモリフォールバックモード)'})")
     print("=" * 60)
 
     try:

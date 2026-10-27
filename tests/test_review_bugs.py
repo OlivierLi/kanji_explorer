@@ -357,7 +357,7 @@ class TestScreenshotBugSuKudamonoIchiHighlight:
         h = bbox[3]
         assert y1 >= 0.30, f"0.1.0.1 の開始 y が上すぎます: {bbox}"
         assert y2 <= 0.46, f"0.1.0.1 の終了 y が木 (y>=0.50) まで侵入しています: {bbox}"
-        assert h <= 0.12, f"0.1.0.1 (一) の高さが異常に大きいです（横画ではなく巨大矩形）: {bbox}"
+        assert h <= 0.12, f"0.1.0.1 (一) の高さが異常に大きいです(横画ではなく巨大矩形): {bbox}"
 
         # クリップ矩形も同様に木に侵入していないこと
         clip_rects = layer_ichi.get("clip_rects", [])
@@ -802,7 +802,7 @@ class TestFourthColumnWordsUI:
 
         # 第4カラム要素の存在検証
         assert 'id="columnWords"' in html_text
-        assert "収録熟語・語彙（国語辞典）" in html_text
+        assert "収録熟語・語彙(国語辞典)" in html_text
         assert 'id="wordsKeywordInput"' in html_text
         assert 'id="filterWordPosition"' in html_text
         assert 'id="filterWordTier"' in html_text

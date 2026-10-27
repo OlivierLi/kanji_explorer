@@ -201,7 +201,7 @@ def render_side_by_side_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>【{html.escape(canonical_char)}】構成要素選択ハイライト並置ビュー | 漢字構造エクスプローラー</title>
+  <title>【{html.escape(canonical_char)}】構成要素選択ハイライト並置ビュー | 漢字構造・部首ドリルダウン探索器</title>
   <link rel="stylesheet" href="/static/styles.css">
   <style>
     body.audit-view {{

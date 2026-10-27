@@ -14,17 +14,17 @@ const IDC_OPERATORS = {
   "⿱": { name: "上下構造", short: "上下", parts: ["上", "下"] },
   "⿲": { name: "左中右構造", short: "左中右", parts: ["左", "中", "右"] },
   "⿳": { name: "上中下構造", short: "上中下", parts: ["上", "中", "下"] },
-  "⿴": { name: "全包囲構造（国構え等）", short: "全包囲", parts: ["外囲", "内側"] },
-  "⿵": { name: "上三方包囲（同構え等）", short: "上包囲", parts: ["上囲", "内側"] },
-  "⿶": { name: "下三方包囲（凶構え等）", short: "下包囲", parts: ["下囲", "内側"] },
-  "⿷": { name: "左三方包囲（区構え等）", short: "左包囲", parts: ["左囲", "内側"] },
-  "⿸": { name: "左上包囲（垂れ）", short: "左上包囲", parts: ["垂れ", "内側"] },
-  "⿹": { name: "右上包囲（包み構え）", short: "右上包囲", parts: ["包み", "内側"] },
-  "⿺": { name: "左下包囲（繞・にょう）", short: "左下包囲", parts: ["繞", "内側"] },
+  "⿴": { name: "全包囲構造(国構え等)", short: "全包囲", parts: ["外囲", "内側"] },
+  "⿵": { name: "上三方包囲(同構え等)", short: "上包囲", parts: ["上囲", "内側"] },
+  "⿶": { name: "下三方包囲(凶構え等)", short: "下包囲", parts: ["下囲", "内側"] },
+  "⿷": { name: "左三方包囲(区構え等)", short: "左包囲", parts: ["左囲", "内側"] },
+  "⿸": { name: "左上包囲(垂れ)", short: "左上包囲", parts: ["垂れ", "内側"] },
+  "⿹": { name: "右上包囲(包み構え)", short: "右上包囲", parts: ["包み", "内側"] },
+  "⿺": { name: "左下包囲(繞・にょう)", short: "左下包囲", parts: ["繞", "内側"] },
   "⿻": { name: "重ね・交差構造", short: "重ね", parts: ["要素1", "要素2"] },
   "⿼": { name: "右三方包囲", short: "右包囲", parts: ["右囲", "内側"] },
   "⿽": { name: "右下包囲", short: "右下包囲", parts: ["右下囲", "内側"] },
-  "⿾": { name: "反転（鏡像）", short: "反転", parts: ["反転対象"] },
+  "⿾": { name: "反転(鏡像)", short: "反転", parts: ["反転対象"] },
   "⿿": { name: "回転", short: "回転", parts: ["回転対象"] }
 };
 
@@ -37,14 +37,14 @@ const DEMO_PRESETS_DATA = {
       block_name: "CJK統合漢字（基本多言語面）",
       tier: "基本漢字",
       stroke_count: 11,
-      radical: "虫（むし・むしへん）[142]",
+      radical: "虫(むし・むしへん) [142]",
       on_readings: ["ケイ"],
       kun_readings: ["ほたる"],
       nanori: [],
       grade: 4,
       jlpt: 2,
       freq: 1200,
-      badges: ["教育漢字（小学4年）", "常用漢字", "新聞頻度 #1200", "旧JLPT 2級"],
+      badges: ["教育漢字(小学4年)", "常用漢字", "新聞頻度 #1200", "旧JLPT 2級"],
       daikanwa: "33140",
       four_corner: "9013.6",
       skip: "2-2-9",
@@ -172,7 +172,7 @@ const DEMO_PRESETS_DATA = {
       block_name: "CJK統合漢字拡張G",
       tier: "拡張G",
       stroke_count: 5,
-      radical: "冖（わかんむり）[14]",
+      radical: "冖(わかんむり) [14]",
       on_readings: [],
       kun_readings: [],
       nanori: [],
@@ -259,7 +259,7 @@ const DEMO_PRESETS_DATA = {
       block_name: "CJK統合漢字拡張F",
       tier: "拡張F",
       stroke_count: 3,
-      radical: "小（しょう・しょうがしら）[42]",
+      radical: "小(しょう・しょうがしら) [42]",
       on_readings: [],
       kun_readings: [],
       nanori: [],
@@ -453,7 +453,7 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
       data = await response.json();
     }
   } catch (err) {
-    console.warn("バックエンドAPI接続待機中（フォールバックデータを表示します）:", err);
+    console.warn("バックエンドAPI接続待機中(フォールバックデータを表示します):", err);
   }
 
   // フォールバックデータ設定（サーバー未接続時）
@@ -471,14 +471,14 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
           tier: "通常漢字",
           stroke_count: 10,
           radical: "部首情報取得中...",
-          ja_on: ["ー"],
-          ja_kun: ["ー"],
+          ja_on: ["—"],
+          ja_kun: ["—"],
           badges: ["基本文字"],
-          daikanwa: "ー",
-          four_corner: "ー",
-          skip_code: "ー",
-          cangjie: "ー",
-          moji_joho: "ー",
+          daikanwa: "—",
+          four_corner: "—",
+          skip_code: "—",
+          cangjie: "—",
+          moji_joho: "—",
           equivalents: []
         },
         alternatives: [{ id: "std", label: "標準構造", ids: effectiveToken }],
@@ -533,16 +533,16 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
     if (btnKvg) {
       btnKvg.disabled = true;
       btnKvg.classList.remove("active");
-      btnKvg.title = "この文字のKanjiVG筆画データは未収録です（明朝体印刷書体で表示）";
+      btnKvg.title = "この文字のKanjiVG筆画データは未収録です(明朝体印刷書体で表示)";
     }
     if (btnMincho) {
       btnMincho.classList.add("active");
-      btnMincho.title = "印刷書体表示（明朝体）";
+      btnMincho.title = "印刷書体表示(明朝体)";
     }
   } else {
     if (btnKvg) {
       btnKvg.disabled = false;
-      btnKvg.title = "筆画表示（KanjiVGベクター・筆画単位ハイライト - デフォルト）";
+      btnKvg.title = "筆画表示(KanjiVGベクター・筆画単位ハイライト - デフォルト)";
       if (state.activeDisplayMode === "kvg") {
         btnKvg.classList.add("active");
         if (btnMincho) btnMincho.classList.remove("active");
@@ -666,11 +666,11 @@ function updateLockControllerUI() {
   if (!badge || !trail) return;
 
   if (!state.lockedPath) {
-    badge.textContent = "第1階層（直接構成）";
+    badge.textContent = "第1階層(直接構成)";
     badge.className = "depth-status-badge level-1";
     if (btnStepUp) btnStepUp.disabled = true;
     if (btnReset) btnReset.disabled = true;
-    trail.innerHTML = '<span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定・逆引き検索、リセットで解除</span>';
+    trail.innerHTML = '<span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定・逆引き検索、「選択解除」で解除</span>';
     return;
   }
 
@@ -684,10 +684,10 @@ function updateLockControllerUI() {
   badge.className = "depth-status-badge is-locked";
   if (hasChildren) {
     const charName = lockedNode.char || lockedNode.raw_char || "部品";
-    badge.textContent = `第${lockedDepth + 1}階層（${charName}の内部）`;
+    badge.textContent = `第${lockedDepth + 1}階層(${charName}の内部)`;
   } else {
     const charName = lockedNode?.char || lockedNode?.raw_char || "";
-    badge.textContent = `第${lockedDepth}階層（末端部品: ${charName}）`;
+    badge.textContent = `第${lockedDepth}階層(末端部品: ${charName})`;
   }
 
   // 祖先パンくずリスト描画
@@ -1395,7 +1395,7 @@ function handleComponentHover(path, charOrEntering = "", role = "", raw_char = "
   });
 
   // 3. HUD更新
-  updateHud(targetChar || "ー", targetPath, targetRole, targetRaw, metaSummary);
+  updateHud(targetChar || "—", targetPath, targetRole, targetRaw, metaSummary);
 }
 
 function clearComponentHover() {
@@ -1500,7 +1500,7 @@ function resetHud() {
       if (hasChildren) {
         trail.textContent = `階層パス: ${state.lockedPath} [役割: ${lockedNode.role_label || "固定部品"}] | 内部の第${lockedDepth + 1}階層部品を探索中`;
         if (hint) {
-          hint.textContent = `[固定中: ${dispChar}] 内部の第${lockedDepth + 1}階層部品をホバーで確認（クリックでさらに固定 / リセットで解除）`;
+          hint.textContent = `[固定中: ${dispChar}] 内部の第${lockedDepth + 1}階層部品をホバーで確認(クリックでさらに固定 / 「選択解除」で解除)`;
         }
       } else {
         trail.textContent = `階層パス: ${state.lockedPath} [役割: ${lockedNode.role_label || "末端部品"}] | 末端部品固定中`;
@@ -1517,7 +1517,7 @@ function resetHud() {
   const cur = state.currentChar || "蛍";
   glyphBox.innerHTML = renderGlyphHTML(cur);
   glyphBox.style.opacity = "0.75";
-  charName.textContent = `${cur}（全体）`;
+  charName.textContent = `${cur}(全体)`;
   codepoint.textContent = getCodepointHex(cur);
   rawOrig.textContent = "";
   trail.textContent = "階層パス: 0 [役割: 全体]";
@@ -1543,13 +1543,13 @@ function renderAttributeCard() {
   tierBadge.textContent = meta.tier || "通常漢字";
 
   // 部首情報の成形（辞書オブジェクトまたは文字列フォールバック）
-  let radText = "ー";
+  let radText = "—";
   if (meta.radical) {
     if (typeof meta.radical === "object") {
       const rName = meta.radical.name || meta.radical.char || "";
       const rNum = meta.radical.num ? ` [第${meta.radical.num}部]` : "";
-      const rChar = meta.radical.char ? `${meta.radical.char}（${rName}）` : rName;
-      radText = rChar ? `${rChar}${rNum}` : (meta.radical.num ? `第${meta.radical.num}部` : "ー");
+      const rChar = meta.radical.char ? `${meta.radical.char}(${rName})` : rName;
+      radText = rChar ? `${rChar}${rNum}` : (meta.radical.num ? `第${meta.radical.num}部` : "—");
     } else if (typeof meta.radical === "string") {
       radText = meta.radical;
     }
@@ -1563,13 +1563,13 @@ function renderAttributeCard() {
     ? meta.ja_on
     : (meta.on_readings || []);
   document.getElementById("attrOnReadings").textContent =
-    onReadings.length > 0 ? onReadings.join("、") : "ー";
+    onReadings.length > 0 ? onReadings.join("、") : "—";
 
   const kunReadings = (Array.isArray(meta.ja_kun) && meta.ja_kun.length > 0)
     ? meta.ja_kun
     : (meta.kun_readings || []);
   document.getElementById("attrKunReadings").textContent =
-    kunReadings.length > 0 ? kunReadings.join("、") : "ー";
+    kunReadings.length > 0 ? kunReadings.join("、") : "—";
 
   // バッジ一覧
   const badgesContainer = document.getElementById("attrBadges");
@@ -1582,13 +1582,13 @@ function renderAttributeCard() {
   });
 
   // 辞書コード
-  const daikanwa = meta.daikanwa || "ー";
-  const fourCorner = meta.four_corner || "ー";
-  const skip = meta.skip_code || meta.skip || "ー";
-  const cangjie = meta.cangjie || "ー";
-  const mojijoho = meta.moji_joho || meta.mojijoho || "ー";
+  const daikanwa = meta.daikanwa || "—";
+  const fourCorner = meta.four_corner || "—";
+  const skip = meta.skip_code || meta.skip || "—";
+  const cangjie = meta.cangjie || "—";
+  const mojijoho = meta.moji_joho || meta.mojijoho || "—";
   document.getElementById("attrDictCodes").textContent =
-    `大漢和: ${daikanwa} | 四隅: ${fourCorner} | SKIP: ${skip} | 倉頡: ${cangjie} | MJ文字: ${mojijoho}`;
+    `大漢和: ${daikanwa} | 四角号碼: ${fourCorner} | SKIP: ${skip} | 倉頡: ${cangjie} | MJ文字: ${mojijoho}`;
 
   // 同等部品・異体字（文字列配列およびオブジェクト配列両対応）
   const equivList = document.getElementById("attrEquivalents");
@@ -1923,7 +1923,7 @@ async function executeFindSearch() {
       }
     }
   } catch (e) {
-    console.warn("逆引きAPI通信待機中（ローカルフォールバック実行）:", e);
+    console.warn("逆引きAPI通信待機中(ローカルフォールバック実行):", e);
     results = DEMO_FIND_DATABASE.filter(item => {
       // 全部品一致（AND検索）
       const matchesAll = chipsArray.every(c => item.components.includes(c));
@@ -2054,7 +2054,7 @@ function renderFindResults(results, activeKeywords = []) {
       const indirectBadge = document.createElement("span");
       indirectBadge.className = "badge badge-indirect";
       if (viaChar) {
-        indirectBadge.innerHTML = `間接（経由: <a class="via-link" data-via="${escapeAttr(viaChar)}">${escapeAttr(viaChar)}</a>）`;
+        indirectBadge.innerHTML = `間接(経由: <a class="via-link" data-via="${escapeAttr(viaChar)}">${escapeAttr(viaChar)}</a>)`;
         const viaLink = indirectBadge.querySelector(".via-link");
         if (viaLink) {
           viaLink.addEventListener("click", (e) => {
@@ -2063,7 +2063,7 @@ function renderFindResults(results, activeKeywords = []) {
           });
         }
       } else {
-        indirectBadge.textContent = "間接（深層展開）";
+        indirectBadge.textContent = "間接(深層展開)";
       }
       badgesRow.appendChild(indirectBadge);
     }
