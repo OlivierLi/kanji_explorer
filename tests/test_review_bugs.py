@@ -742,6 +742,14 @@ class TestCodeSimplificationAndDeduplication:
         assert "旁" in card_html
         assert "第1階層" in card_html
 
+    def test_render_side_by_side_html_calligraphic_strokes(self):
+        """view_renderer が KanjiVGモード時に calligraphic-stroke クラスおよび calligraphy_d を使用すること."""
+        meta = {"codepoint": "U+6C38"}
+        html_out = view_renderer.render_side_by_side_html("永", meta, {"mode": ["kvg"]})
+        assert "calligraphic-stroke" in html_out
+        assert ".calligraphic-stroke" in html_out
+        assert ".active-stroke.calligraphic-stroke" in html_out
+
 
 class TestStopThirdColumnHoverUpdate:
     """ホバー時の第3カラム（検索結果）更新停止とクリック連動UXの一貫性検証."""

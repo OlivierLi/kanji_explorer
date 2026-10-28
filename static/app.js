@@ -873,6 +873,848 @@ function renderCanvas() {
   applyHitTestDepth();
 }
 
+/* =============================================================================
+   瘦金體（Slender Gold Calligraphy）数理運筆エンジン (Jiucheng / Slender Physics)
+   ============================================================================= */
+
+const SLENDER_PHYSICS = {
+  thickness: 0.86,
+  tonStrength: 1.08,
+  waistRatio: 0.80,
+  nibAngleDeg: -40,
+  kasureAmount: 0.30
+};
+
+/**
+ * 永字八法・筆画種別分類
+ */
+function classifyStrokeBehavior(stroke) {
+  const t = (stroke.type || "").trim();
+  const name = (stroke.stroke_name || "").toLowerCase();
+
+  const isHook = t.includes("㇚") || t.includes("㇈") || t.includes("㇂") || t.includes("㇆") || t.includes("㇖") || t.includes("㇟") || t.includes("㇡") || name.includes("gōu") || name.includes("鉤");
+  const isRisingTi = t.includes("㇀") || name.includes("tí") || name.includes("提");
+  const isRightNa = (t.includes("㇏") || name.includes("nà") || name.includes("捺")) && !t.includes("㇔");
+  const isDot = (t.includes("㇔") || name.includes("diǎn") || name.includes("点")) && !isRightNa && !isRisingTi;
+  const isSweepEnd = !isHook && !isDot && !isRightNa && (t.includes("㇒") || t.includes("㇇") || isRisingTi || name.includes("piě") || name.includes("撇"));
+  const isFold = t.includes("㇕") || t.includes("㇄") || t.includes("㇈") || t.includes("㇆") || t.includes("㇇") || t.includes("㇖") || name.includes("zhé") || name.includes("折");
+  const isHorizontal = t.includes("㇐") || name.includes("héng") || name.includes("横");
+  const isVertical = t.includes("㇑") || name.includes("shù") || name.includes("竪");
+  const isConnectingVertical = t.includes("㇑a");
+
+  return {
+    isSweepEnd,
+    isRisingTi,
+    isRightNa,
+    isDot,
+    isHook,
+    isFold,
+    isHorizontal,
+    isVertical,
+    isConnectingVertical
+  };
+}
+
+/**
+ * Chaikinのアルゴリズムによる開曲線スムージング
+ */
+function chaikinSmoothOpenChain(pts, iterations = 2) {
+  if (!pts || pts.length < 3) return pts || [];
+  let curr = pts;
+  for (let it = 0; it < iterations; it++) {
+    if (curr.length < 3) break;
+    const next = [curr[0]];
+    for (let i = 0; i < curr.length - 1; i++) {
+      const p0 = curr[i];
+      const p1 = curr[i + 1];
+      next.push({
+        x: 0.75 * p0.x + 0.25 * p1.x,
+        y: 0.75 * p0.y + 0.25 * p1.y
+      });
+      next.push({
+        x: 0.25 * p0.x + 0.75 * p1.x,
+        y: 0.25 * p0.y + 0.75 * p1.y
+      });
+    }
+    next.push(curr[curr.length - 1]);
+    curr = next;
+  }
+  return curr;
+}
+
+let offscreenSvg = null;
+let offscreenSamplerPath = null;
+
+function getOffscreenSamplerPath() {
+  if (typeof document === "undefined") return null;
+  if (!offscreenSamplerPath) {
+    try {
+      offscreenSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      offscreenSvg.setAttribute("viewBox", "0 0 109 109");
+      offscreenSvg.setAttribute("width", "0");
+      offscreenSvg.setAttribute("height", "0");
+      offscreenSvg.style.position = "absolute";
+      offscreenSvg.style.top = "-9999px";
+      offscreenSvg.style.left = "-9999px";
+      offscreenSvg.style.visibility = "hidden";
+      offscreenSamplerPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      offscreenSvg.appendChild(offscreenSamplerPath);
+      const root = document.body || document.documentElement;
+      if (root) {
+        root.appendChild(offscreenSvg);
+      }
+    } catch (e) {
+      return null;
+    }
+  } else if (offscreenSvg && !offscreenSvg.parentNode) {
+    const root = document.body || document.documentElement;
+    if (root) {
+      root.appendChild(offscreenSvg);
+    }
+  }
+  return offscreenSamplerPath;
+}
+
+/**
+ * 階層木構造からKanjiVG筆画総数を計算
+ */
+function countKvgStrokes(group) {
+  if (!group) return 0;
+  let count = (group.strokes || []).length;
+  if (group.children) {
+    for (const child of group.children) {
+      count += countKvgStrokes(child);
+    }
+  }
+  return count;
+}
+
+const numFmt = n => (Number.isFinite(n) ? Number(n.toFixed(2)) : 0);
+
+/**
+ * 筆画輪郭境界線のSVGパス文字列（外周）生成
+ */
+function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = false) {
+  const pts = compiled.samples;
+  if (!pts || limitIdx < 1) return "";
+
+  const isSharpTip = compiled.behavior.isSweepEnd || compiled.behavior.isRightNa;
+  const leftChain = [];
+  const rightChain = [];
+  const hf = compiled.hookFeature;
+  const isUpHook = hf && hf.isUpwardHook;
+  const leftLimit = (isHookTruncated && !isUpHook) ? Math.max(2, limitIdx - 5) : limitIdx;
+  const rightLimit = (isHookTruncated && isUpHook) ? Math.max(2, limitIdx - 5) : limitIdx;
+  for (let i = 0; i <= leftLimit; i++) {
+    leftChain.push({ x: pts[i].lx, y: pts[i].ly });
+  }
+  for (let i = 0; i <= rightLimit; i++) {
+    rightChain.push({ x: pts[i].rx, y: pts[i].ry });
+  }
+  const smoothL = chaikinSmoothOpenChain(leftChain, 2);
+  const smoothR = chaikinSmoothOpenChain(rightChain, 2);
+
+  if (smoothL.length === 0 || smoothR.length === 0) return "";
+
+  let d = "M " + numFmt(smoothL[0].x) + " " + numFmt(smoothL[0].y);
+  for (let i = 1; i < smoothL.length; i++) {
+    d += " L " + numFmt(smoothL[i].x) + " " + numFmt(smoothL[i].y);
+  }
+
+  const lastL = smoothL[smoothL.length - 1];
+  const lastR = smoothR[smoothR.length - 1];
+  const endPt = pts[limitIdx];
+
+  if (isHookTruncated) {
+    d += " L " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+  } else if (isSharpTip && limitIdx >= pts.length - 2) {
+    const tipX = (lastL.x + lastR.x) * 0.5 + endPt.tx * 3.5;
+    const tipY = (lastL.y + lastR.y) * 0.5 + endPt.ty * 3.5;
+    d += " L " + numFmt(tipX) + " " + numFmt(tipY) + " L " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+  } else if (compiled.behavior.isDot) {
+    const endMidX = (lastL.x + lastR.x) * 0.5;
+    const endMidY = (lastL.y + lastR.y) * 0.5;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.48;
+    d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+  } else {
+    const endMidX = (lastL.x + lastR.x) * 0.5;
+    const endMidY = (lastL.y + lastR.y) * 0.5;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.35;
+    d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+  }
+
+  for (let i = smoothR.length - 2; i >= 0; i--) {
+    d += " L " + numFmt(smoothR[i].x) + " " + numFmt(smoothR[i].y);
+  }
+
+  const firstL = smoothL[0];
+  const firstR = smoothR[0];
+  const p0 = pts[0];
+  const entryRatio = compiled.behavior.isDot ? 0.32 : 0.25;
+  const entrySpan = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y) * entryRatio;
+  const cp1x = firstR.x - p0.tx * (entrySpan * 0.4);
+  const cp1y = firstR.y - p0.ty * (entrySpan * 0.4);
+  const cp2x = firstL.x - p0.tx * (entrySpan * 0.4);
+  const cp2y = firstL.y - p0.ty * (entrySpan * 0.4);
+  d += " C " + numFmt(cp1x) + " " + numFmt(cp1y) + " " + numFmt(cp2x) + " " + numFmt(cp2y) + " " + numFmt(firstL.x) + " " + numFmt(firstL.y) + " Z";
+
+  return d;
+}
+
+/**
+ * 鉤部（趯・戈鉤・横鉤）の三次元的三角形ウェッジパス生成
+ */
+function drawFleshyHookWedgePath(compiled, limitIdx, heelIdx) {
+  const hf = compiled.hookFeature;
+  if (!hf) return "";
+  const pts = compiled.samples;
+  const H = pts[heelIdx];
+  if (!H) return "";
+  const tonStrength = SLENDER_PHYSICS.tonStrength || 1.08;
+  const r = compiled.shaftRadius * (1.08 * tonStrength);
+
+  const stx = H.tx;
+  const sty = H.ty;
+  let d = "";
+
+  if (hf.isUpwardHook) {
+    const outerIdx = Math.max(2, heelIdx - 6);
+    const innerIdx = Math.max(2, heelIdx - 6);
+    if (!pts[outerIdx] || !pts[innerIdx]) return "";
+
+    const tipX = H.x + r * 0.35;
+    const tipY = H.y - r * 3.0;
+    const heelBottomX = H.x + r * 1.15;
+    const heelBottomY = H.y + r * 0.95;
+
+    d += "M " + numFmt(pts[outerIdx].lx) + " " + numFmt(pts[outerIdx].ly);
+    for (let k = outerIdx + 1; k <= heelIdx; k++) {
+      d += " L " + numFmt(pts[k].lx) + " " + numFmt(pts[k].ly);
+    }
+    d += " Q " + numFmt(pts[heelIdx].lx + r * 0.45) + " " + numFmt(H.y + r * 1.05) + " " + numFmt(heelBottomX) + " " + numFmt(heelBottomY);
+    d += " Q " + numFmt(H.x + r * 1.35) + " " + numFmt(H.y - r * 0.45) + " " + numFmt(tipX) + " " + numFmt(tipY);
+    d += " Q " + numFmt(pts[heelIdx].rx + r * 0.05) + " " + numFmt(H.y - r * 0.55) + " " + numFmt(pts[innerIdx].rx) + " " + numFmt(pts[innerIdx].ry) + " Z";
+  } else {
+    let ux = -0.93;
+    let uy = -0.36;
+    let hookLen = r * 3.15;
+
+    if (hf.isDownLeftHook) {
+      ux = -0.68;
+      uy = 0.73;
+      hookLen = r * 2.5;
+    }
+
+    const flickProgress = (limitIdx - heelIdx) / Math.max(1, pts.length - 1 - heelIdx);
+    const curLen = Math.max(r * 1.6, hookLen * Math.min(1.0, flickProgress * 1.15));
+
+    const tipX = H.x + ux * curLen;
+    const tipY = H.y + uy * curLen;
+
+    const outerIdx = Math.max(2, heelIdx - 6);
+    const innerIdx = Math.max(2, heelIdx - 5);
+    if (!pts[outerIdx] || !pts[innerIdx]) return "";
+
+    const heelBottomX = H.x + stx * r * 1.15;
+    const heelBottomY = H.y + sty * r * 1.15;
+
+    d += "M " + numFmt(pts[innerIdx].lx) + " " + numFmt(pts[innerIdx].ly);
+    d += " Q " + numFmt(pts[innerIdx].lx - r * 0.45) + " " + numFmt((tipY + pts[innerIdx].ly) * 0.5 + r * 0.20) + " " + numFmt(tipX) + " " + numFmt(tipY);
+    d += " Q " + numFmt(H.x + ux * curLen * 0.42 + stx * r * 0.65) + " " + numFmt(H.y + uy * curLen * 0.42 + sty * r * 0.65) + " " + numFmt(heelBottomX) + " " + numFmt(heelBottomY);
+    d += " Q " + numFmt(pts[heelIdx].rx + stx * r * 0.9) + " " + numFmt(pts[heelIdx].ry + sty * r * 0.9) + " " + numFmt(pts[heelIdx].rx) + " " + numFmt(pts[heelIdx].ry);
+    for (let k = heelIdx - 1; k >= outerIdx; k--) {
+      d += " L " + numFmt(pts[k].rx) + " " + numFmt(pts[k].ry);
+    }
+    d += " Z";
+  }
+
+  return d;
+}
+
+/**
+ * 長撇・掃筆の渇筆（かすれ）スリットパス生成（反時計回り閉曲線によりnonzeroで中抜き）
+ */
+function generateKasureSlitsPath(compiled, limitIdx) {
+  const pts = compiled.samples;
+  const origLen = compiled.origLen || 0;
+  const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
+  if (!compiled.behavior.isSweepEnd || origLen <= 45 || compiled.behavior.isRightNa || compiled.hookFeature || cornersCount > 1) {
+    return "";
+  }
+
+  const kScale = (SLENDER_PHYSICS.kasureAmount || 0.30) / 0.30;
+  const kasureChannels = [
+    { lat: 0.20, startU: 0.72, endU: 0.98, widthFrac: 0.065 * kScale },
+    { lat: 0.38, startU: 0.66, endU: 1.00, widthFrac: 0.075 * kScale },
+    { lat: 0.60, startU: 0.76, endU: 0.99, widthFrac: 0.070 * kScale },
+    { lat: 0.78, startU: 0.70, endU: 1.00, widthFrac: 0.075 * kScale },
+    { lat: 0.94, startU: 0.86, endU: 0.99, widthFrac: 0.080 * kScale }
+  ];
+
+  let slitPathD = "";
+
+  for (const ch of kasureChannels) {
+    const startIdx = Math.floor(pts.length * ch.startU);
+    const endIdx = Math.min(limitIdx, Math.floor(pts.length * ch.endU));
+    if (limitIdx <= startIdx || endIdx - startIdx < 2) continue;
+
+    const rPts = [];
+    const lPts = [];
+
+    for (let i = startIdx; i <= endIdx; i++) {
+      const p1 = pts[i];
+      const uMid = p1.u;
+      const t = Math.max(0, Math.min(1.0, (uMid - ch.startU) / (ch.endU - ch.startU)));
+      const localWidth = Math.hypot(p1.rx - p1.lx, p1.ry - p1.ly);
+      const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
+      const halfW = Math.max(0.12, localWidth * ch.widthFrac * env * 0.5);
+
+      const bx = p1.lx + (p1.rx - p1.lx) * ch.lat;
+      const by = p1.ly + (p1.ry - p1.ly) * ch.lat;
+
+      rPts.push({ x: bx - p1.nx * halfW, y: by - p1.ny * halfW });
+      lPts.push({ x: bx + p1.nx * halfW, y: by + p1.ny * halfW });
+    }
+
+    if (rPts.length < 2) continue;
+
+    let chD = "M " + numFmt(rPts[0].x) + " " + numFmt(rPts[0].y);
+    for (let i = 1; i < rPts.length; i++) {
+      chD += " L " + numFmt(rPts[i].x) + " " + numFmt(rPts[i].y);
+    }
+    for (let i = lPts.length - 1; i >= 0; i--) {
+      chD += " L " + numFmt(lPts[i].x) + " " + numFmt(lPts[i].y);
+    }
+    chD += " Z";
+
+    slitPathD += (slitPathD ? " " : "") + chD;
+  }
+
+  return slitPathD;
+}
+
+/**
+ * 瘦金體（Slender Gold）筆画コンパイラ
+ * KanjiVG 中心線パス d (0..109 viewBox) を流麗な骨格・頓挫・渇筆を持つ輪郭パスへ変換
+ */
+function compileSlenderStrokePathD(d, type = "", index = 0, totalStrokes = 10) {
+  if (typeof d === "object" && d !== null) {
+    if (d.calligraphy_d) return d.calligraphy_d;
+    type = type || d.type || "";
+    index = index !== undefined ? index : (d.index || 0);
+    d = d.d || "";
+  }
+  if (!d || typeof d !== "string") return "";
+
+  const sampler = getOffscreenSamplerPath();
+  if (!sampler || typeof sampler.getTotalLength !== "function") {
+    return d;
+  }
+
+  try {
+    sampler.setAttribute("d", d);
+    const origLen = Math.max(0.1, sampler.getTotalLength());
+    if (isNaN(origLen) || origLen < 0.1) return d;
+
+    const stroke = {
+      d,
+      type: type || "",
+      index: index + 1
+    };
+
+    const step = 0.28;
+    const numSamples = Math.max(32, Math.ceil(origLen / step));
+    const rawPts = [];
+
+    const boxSize = 109;
+    const boxX = 0;
+    const boxY = 0;
+    const scale = 1.0;
+
+    for (let i = 0; i <= numSamples; i++) {
+      const s = (i / numSamples) * origLen;
+      const pt = sampler.getPointAtLength(s);
+      rawPts.push({
+        s,
+        u: i / numSamples,
+        svgX: pt.x,
+        svgY: pt.y
+      });
+    }
+
+    if (rawPts.every(p => p.svgX === 0 && p.svgY === 0)) {
+      return d;
+    }
+
+    const behavior = classifyStrokeBehavior(stroke);
+
+    // 起筆アライメント（初期ベクトルの棘・無駄な突起を除去）
+    if (!behavior.isDot && rawPts.length > 8 && origLen > 8) {
+      const anchorS = Math.min(origLen * 0.20, 2.8);
+      const lookS = Math.min(origLen * 0.42, 5.5);
+      const anchorIdx = Math.min(numSamples - 2, Math.max(2, Math.round((anchorS / origLen) * numSamples)));
+      const lookIdx = Math.min(numSamples, Math.max(anchorIdx + 2, Math.round((lookS / origLen) * numSamples)));
+
+      const shaftDx = rawPts[lookIdx].svgX - rawPts[anchorIdx].svgX;
+      const shaftDy = rawPts[lookIdx].svgY - rawPts[anchorIdx].svgY;
+      const shaftMag = Math.hypot(shaftDx, shaftDy) || 1;
+      const stx = shaftDx / shaftMag;
+      const sty = shaftDy / shaftMag;
+
+      for (let i = 0; i < anchorIdx; i++) {
+        const blend = Math.pow(1.0 - (i / anchorIdx), 0.85);
+        const distBack = (rawPts[anchorIdx].s - rawPts[i].s);
+        const projX = rawPts[anchorIdx].svgX - stx * distBack;
+        const projY = rawPts[anchorIdx].svgY - sty * distBack;
+        rawPts[i].svgX = rawPts[i].svgX * (1.0 - 0.95 * blend) + projX * (0.95 * blend);
+        rawPts[i].svgY = rawPts[i].svgY * (1.0 - 0.95 * blend) + projY * (0.95 * blend);
+      }
+    }
+
+    // スライディングウィンドウによる曲率解析
+    let hookFeature = null;
+    const win = Math.max(2, Math.round(2.0 / step));
+
+    for (let i = 0; i <= numSamples; i++) {
+      if (i >= win && i <= numSamples - win) {
+        const vx1 = rawPts[i].svgX - rawPts[i - win].svgX;
+        const vy1 = rawPts[i].svgY - rawPts[i - win].svgY;
+        const vx2 = rawPts[i + win].svgX - rawPts[i].svgX;
+        const vy2 = rawPts[i + win].svgY - rawPts[i].svgY;
+        const m1 = Math.hypot(vx1, vy1) || 1;
+        const m2 = Math.hypot(vx2, vy2) || 1;
+        const dot = Math.max(-1, Math.min(1, (vx1 * vx2 + vy1 * vy2) / (m1 * m2)));
+        rawPts[i].turnAngle = Math.acos(dot);
+        rawPts[i].turnSign = (vx1 * vy2 - vy1 * vx2) >= 0 ? 1 : -1;
+      } else {
+        rawPts[i].turnAngle = 0;
+        rawPts[i].turnSign = 1;
+      }
+    }
+
+    // 鉤部頂点・跳躍ガイド検出
+    if (behavior.isHook && origLen > 13) {
+      const searchStart = Math.floor(numSamples * 0.65);
+      let bestIdx = -1;
+      let maxTurn = 0.28;
+      for (let i = searchStart; i <= numSamples - 2; i++) {
+        if (rawPts[i].turnAngle > maxTurn) {
+          maxTurn = rawPts[i].turnAngle;
+          bestIdx = i;
+        }
+      }
+      let maxY = -Infinity;
+      let maxYIdx = -1;
+      for (let i = searchStart; i <= numSamples - 1; i++) {
+        if (rawPts[i].svgY > maxY) {
+          maxY = rawPts[i].svgY;
+          maxYIdx = i;
+        }
+      }
+      if (maxYIdx > searchStart && maxY - rawPts[numSamples].svgY > 0.8) {
+        bestIdx = maxYIdx;
+      }
+      if (bestIdx === -1) {
+        bestIdx = Math.floor(numSamples * 0.84);
+      }
+
+      const apexPt = rawPts[bestIdx];
+      const endPt = rawPts[numSamples];
+      const fdx = endPt.svgX - apexPt.svgX;
+      const fdy = endPt.svgY - apexPt.svgY;
+
+      const isDownLeftHook = (fdx < -0.2 && fdy > 0.2);
+      const isVerticalLeftHook = (!isDownLeftHook && fdx < -0.2);
+      const isUpwardHook = (!isDownLeftHook && !isVerticalLeftHook);
+
+      let hookUx = -0.92;
+      let hookUy = -0.39;
+
+      if (isVerticalLeftHook) {
+        hookUx = -0.92;
+        hookUy = -0.39;
+      } else if (isUpwardHook) {
+        hookUy = -0.988;
+        hookUx = 0.15;
+      } else {
+        hookUx = -0.68;
+        hookUy = 0.73;
+      }
+
+      const heelIdx = Math.max(4, bestIdx - 4);
+      hookFeature = {
+        index: bestIdx,
+        heelIdx: heelIdx,
+        u: rawPts[bestIdx].u,
+        s: rawPts[bestIdx].s,
+        angle: Math.max(1.3, rawPts[bestIdx].turnAngle),
+        isUpwardHook,
+        isVerticalLeftHook,
+        isDownLeftHook,
+        flickUx: hookUx,
+        flickUy: hookUy,
+        kind: "hook"
+      };
+    }
+
+    // 折（コーナー）特徴点検出
+    const cornerFeatures = [];
+    const minCornerS = 5.0;
+    const maxCornerS = hookFeature ? hookFeature.s - 6.5 : origLen - 4.5;
+    const minSep = Math.max(6, Math.round(7.0 / step));
+
+    for (let i = win + 2; i < numSamples - win - 2; i++) {
+      const s = rawPts[i].s;
+      if (s < minCornerS || s > maxCornerS) continue;
+      const a = rawPts[i].turnAngle;
+      if (a > 0.55) {
+        let isPeak = true;
+        for (let k = -minSep; k <= minSep; k++) {
+          if (k !== 0 && i + k >= 0 && i + k <= numSamples && rawPts[i + k].turnAngle > a) {
+            isPeak = false;
+            break;
+          }
+        }
+        if (isPeak) {
+          cornerFeatures.push({
+            index: i,
+            u: rawPts[i].u,
+            s: rawPts[i].s,
+            angle: a,
+            turnSign: rawPts[i].turnSign,
+            kind: "corner"
+          });
+        }
+      }
+    }
+
+    // 累積弧長と座標正規化
+    let cumS = 0;
+    for (let i = 0; i <= numSamples; i++) {
+      if (i > 0) {
+        cumS += Math.hypot(rawPts[i].svgX - rawPts[i - 1].svgX, rawPts[i].svgY - rawPts[i - 1].svgY);
+      }
+      rawPts[i].s = cumS;
+      rawPts[i].x = boxX + rawPts[i].svgX * scale;
+      rawPts[i].y = boxY + rawPts[i].svgY * scale;
+    }
+    const totalLen = Math.max(0.1, cumS);
+    for (let i = 0; i <= numSamples; i++) {
+      rawPts[i].u = rawPts[i].s / totalLen;
+    }
+    if (hookFeature) {
+      hookFeature.s = rawPts[hookFeature.index].s;
+      hookFeature.u = rawPts[hookFeature.index].u;
+    }
+    for (const cf of cornerFeatures) {
+      cf.s = rawPts[cf.index].s;
+      cf.u = rawPts[cf.index].u;
+    }
+
+    // 接線ベクトル (tx, ty) と法線ベクトル (nx, ny)
+    for (let i = 0; i <= numSamples; i++) {
+      let iPrev = Math.max(0, i - 4);
+      let iNext = Math.min(numSamples, i + 4);
+      if (hookFeature) {
+        if (i <= hookFeature.index && iNext > hookFeature.index) iNext = hookFeature.index;
+        if (i >= hookFeature.index && iPrev < hookFeature.index) iPrev = hookFeature.index;
+      }
+      if (iPrev === iNext) {
+        iPrev = Math.max(0, i - 1);
+        iNext = Math.min(numSamples, i + 1);
+      }
+      const dx = rawPts[iNext].x - rawPts[iPrev].x;
+      const dy = rawPts[iNext].y - rawPts[iPrev].y;
+      const mag = Math.hypot(dx, dy) || 1;
+      rawPts[i].tx = dx / mag;
+      rawPts[i].ty = dy / mag;
+      rawPts[i].nx = -rawPts[i].ty;
+      rawPts[i].ny = rawPts[i].tx;
+      rawPts[i].angle = Math.atan2(dy, dx);
+    }
+
+    const initTx = rawPts[0].tx;
+    const initTy = rawPts[0].ty;
+    const isDownEntry = initTy > 0.48 && Math.abs(initTx) < 0.85;
+    const isRightToLeftSweep = initTx < -0.42;
+
+    // 瘦金體の筆画太さ（密度スケール & 筆画種別補正）
+    const densityScale = totalStrokes >= 13 ? 0.95 : (totalStrokes >= 9 ? 1.04 : 1.14);
+    const curveWeightBoost = (behavior.isSweepEnd || behavior.isHook || behavior.isRightNa) ? 1.15 : 1.05;
+    const shaftRadius = (boxSize * 0.024) * SLENDER_PHYSICS.thickness * densityScale * curveWeightBoost;
+    const tonMult = SLENDER_PHYSICS.tonStrength;
+    const waistMult = SLENDER_PHYSICS.waistRatio;
+
+    // 左右幅エンベロープ (wL, wR) の計算
+    for (let i = 0; i <= numSamples; i++) {
+      const p = rawPts[i];
+      const u = p.u;
+      const s = p.s;
+
+      let wL = 1.0;
+      let wR = 1.0;
+      let shiftL = 0.0;
+      let shiftR = 0.0;
+      let cornerDispLx = 0.0;
+      let cornerDispLy = 0.0;
+      let cornerDispRx = 0.0;
+      let cornerDispRy = 0.0;
+
+      if (behavior.isDot) {
+        const arch = Math.sin(Math.pow(u, 0.82) * (Math.PI * 0.72));
+        wL = 0.28 + (1.05 * tonMult) * arch;
+        wR = 0.26 + (0.90 * tonMult) * arch;
+      } else if (behavior.isRisingTi) {
+        const headZone = Math.min(5.5, totalLen * 0.28);
+        if (s < headZone) {
+          const t = s / headZone;
+          const blend = 0.5 * (1 + Math.cos(t * Math.PI));
+          wL = 0.88 + (0.42 * tonMult) * blend;
+          wR = 0.88 + (0.75 * tonMult) * blend;
+        } else {
+          const t = (s - headZone) / Math.max(0.1, totalLen - headZone);
+          const taper = Math.pow(Math.max(0.06, 1 - t * 0.94), 0.85);
+          wL = 0.88 * taper;
+          wR = (0.88 + 0.25 * tonMult) * taper;
+        }
+      } else if (behavior.isRightNa) {
+        if (u <= 0.68) {
+          const t = u / 0.68;
+          const swell = Math.sin(t * Math.PI * 0.5);
+          wL = 0.32 + (0.95 * tonMult - 0.32) * swell;
+          wR = 0.32 + (1.42 * tonMult - 0.32) * swell;
+        } else {
+          const tFoot = (u - 0.68) / 0.32;
+          const decay = Math.pow(Math.cos(tFoot * Math.PI * 0.5), 1.5);
+          wL = Math.max(0.02, (0.95 * tonMult) * decay);
+          wR = Math.max(0.02, (1.42 * tonMult) * decay);
+        }
+      } else {
+        const waistArch = Math.sin(u * Math.PI);
+        const shaftTension = 1.0 - (1.0 - waistMult) * 0.65 * waistArch;
+        wL = shaftTension;
+        wR = shaftTension;
+
+        const headLen = Math.min(totalLen * 0.22, 6.0);
+        if (s < headLen) {
+          const uEntry = s / headLen;
+          const entrySwell = Math.sin(uEntry * Math.PI * 0.5);
+          const entryWidthFactor = 0.68 + (1.0 - 0.68) * entrySwell;
+          const blend = 0.5 * (1 + Math.cos(uEntry * Math.PI));
+
+          if (isDownEntry) {
+            wL += (0.38 * tonMult) * blend;
+            wR += (0.16 * tonMult) * blend;
+            shiftL -= (0.10 * blend) * entrySwell;
+          } else if (isRightToLeftSweep) {
+            wR += (0.36 * tonMult) * blend;
+            wL += (0.20 * tonMult) * blend;
+            shiftL -= (0.12 * blend) * entrySwell;
+          } else {
+            wL = shaftTension * (0.96 + 0.08 * blend);
+            wR = shaftTension * (1.02 + 0.14 * blend);
+            shiftL = (-0.48 * blend) * entrySwell;
+            shiftR = (+0.22 * blend) * entrySwell;
+          }
+          wL *= entryWidthFactor;
+          wR *= entryWidthFactor;
+        }
+
+        for (const cf of cornerFeatures) {
+          const dCorner = s - cf.s;
+          if (dCorner >= -5.0 && dCorner <= 5.0) {
+            const tInner = dCorner / 3.6;
+            const bellInner = Math.abs(tInner) <= 1.0 ? 0.5 * (1 + Math.cos(tInner * Math.PI)) : 0.0;
+            if (cf.turnSign >= 0) {
+              wL = Math.max(0.68, wL - 0.10 * bellInner);
+            } else {
+              wR = Math.max(0.68, wR - 0.10 * bellInner);
+            }
+          }
+        }
+
+        if (hookFeature) {
+          const hs = hookFeature.s;
+          const dsHook = s - hs;
+          if (dsHook <= 0) {
+            const dHeel = -dsHook;
+            if (dHeel < 7.0) {
+              const tHeel = dHeel / 7.0;
+              const heelBell = 0.5 * (1 + Math.cos(tHeel * Math.PI));
+              const outerIsL = (hookFeature.flickUx < 0 && p.tx < 0.3) || (hookFeature.flickUy < -0.5 && p.turnSign < 0);
+              if (outerIsL) {
+                wL += (0.24 * tonMult) * heelBell;
+                wR = Math.min(wR, shaftTension * (1.0 - 0.20 * heelBell));
+              } else {
+                wR += (0.24 * tonMult) * heelBell;
+                wL = Math.min(wL, shaftTension * (1.0 - 0.20 * heelBell));
+              }
+            }
+          }
+        } else if (behavior.isSweepEnd) {
+          const sweepStart = isRightToLeftSweep ? 0.38 : 0.44;
+          if (u > sweepStart) {
+            const tSweep = (u - sweepStart) / (1 - sweepStart);
+            const taper = Math.pow(Math.max(0.02, 1 - tSweep * 0.98), 0.78);
+            wL *= taper;
+            wR *= taper;
+          }
+        } else if (behavior.isVertical && !behavior.isFold) {
+          const endDist = totalLen - s;
+          const tomeZone = Math.min(5.5, totalLen * 0.28);
+          if (endDist < tomeZone) {
+            const t = 1 - (endDist / tomeZone);
+            const smoothT = 3 * t * t - 2 * t * t * t;
+            if (behavior.isConnectingVertical) {
+              wL += (0.15 * tonMult) * smoothT;
+              wR += (0.15 * tonMult) * smoothT;
+            } else {
+              wL += (0.30 * tonMult) * smoothT;
+              wR += (0.30 * tonMult) * smoothT;
+            }
+          }
+        } else {
+          const endDist = totalLen - s;
+          const tomeZone = Math.min(5.5, totalLen * 0.28);
+          if (endDist < tomeZone) {
+            const t = 1 - (endDist / tomeZone);
+            const smoothT = 3 * t * t - 2 * t * t * t;
+            wL += (0.30 * tonMult) * smoothT;
+            wR += (0.48 * tonMult) * smoothT;
+            shiftR += 0.16 * smoothT;
+          }
+        }
+      }
+
+      const rL = shaftRadius * wL;
+      const rR = shaftRadius * wR;
+
+      p.lx = p.x + p.nx * rL + p.tx * (shiftL * shaftRadius) + cornerDispLx;
+      p.ly = p.y + p.ny * rL + p.ty * (shiftL * shaftRadius) + cornerDispLy;
+      p.rx = p.x - p.nx * rR + p.tx * (shiftR * shaftRadius) + cornerDispRx;
+      p.ry = p.y - p.ny * rR + p.ty * (shiftR * shaftRadius) + cornerDispRy;
+    }
+
+    // ラプラシアンスムージング
+    const smoothLimit = hookFeature ? hookFeature.index : numSamples - 1;
+    for (let pass = 0; pass < 2; pass++) {
+      const nextLx = rawPts.map(p => p.lx);
+      const nextLy = rawPts.map(p => p.ly);
+      const nextRx = rawPts.map(p => p.rx);
+      const nextRy = rawPts.map(p => p.ry);
+
+      for (let i = 1; i < smoothLimit; i++) {
+        nextLx[i] = 0.25 * rawPts[i - 1].lx + 0.50 * rawPts[i].lx + 0.25 * rawPts[i + 1].lx;
+        nextLy[i] = 0.25 * rawPts[i - 1].ly + 0.50 * rawPts[i].ly + 0.25 * rawPts[i + 1].ly;
+        nextRx[i] = 0.25 * rawPts[i - 1].rx + 0.50 * rawPts[i].rx + 0.25 * rawPts[i + 1].rx;
+        nextRy[i] = 0.25 * rawPts[i - 1].ry + 0.50 * rawPts[i].ry + 0.25 * rawPts[i + 1].ry;
+      }
+      for (let i = 1; i < smoothLimit; i++) {
+        rawPts[i].lx = nextLx[i];
+        rawPts[i].ly = nextLy[i];
+        rawPts[i].rx = nextRx[i];
+        rawPts[i].ry = nextRy[i];
+      }
+    }
+
+    // 折肩ベベル（九成宮・折の面取り）
+    for (const cf of cornerFeatures) {
+      if (cf.turnSign >= 0) {
+        const w = shaftRadius * tonMult;
+        for (let i = 0; i <= numSamples; i++) {
+          const p = rawPts[i];
+          const dCorner = p.s - cf.s;
+          if (dCorner >= -7.0 && dCorner <= 10.0) {
+            const t1 = (dCorner - (-1.8)) / 4.2;
+            const b1 = Math.abs(t1) <= 1.0 ? 0.5 * (1 + Math.cos(t1 * Math.PI)) : 0.0;
+            const t2 = (dCorner - 1.0) / 5.0;
+            const b2 = Math.abs(t2) <= 1.0 ? 0.5 * (1 + Math.cos(t2 * Math.PI)) : 0.0;
+            p.rx += (+0.06 * w) * b1 + (+0.26 * w) * b2;
+            p.ry += (-0.16 * w) * b1 + (+0.04 * w) * b2;
+          }
+        }
+      }
+    }
+
+    // 折近傍の滑らかな接続処理
+    for (const cf of cornerFeatures) {
+      for (let pass = 0; pass < 2; pass++) {
+        const tempRx = [];
+        const tempRy = [];
+        const tempLx = [];
+        const tempLy = [];
+        for (let i = 1; i < smoothLimit; i++) {
+          const dCorner = rawPts[i].s - cf.s;
+          if (dCorner >= -8.0 && dCorner <= 12.0) {
+            tempRx[i] = 0.25 * rawPts[i - 1].rx + 0.50 * rawPts[i].rx + 0.25 * rawPts[i + 1].rx;
+            tempRy[i] = 0.25 * rawPts[i - 1].ry + 0.50 * rawPts[i].ry + 0.25 * rawPts[i + 1].ry;
+            tempLx[i] = 0.25 * rawPts[i - 1].lx + 0.50 * rawPts[i].lx + 0.25 * rawPts[i + 1].lx;
+            tempLy[i] = 0.25 * rawPts[i - 1].ly + 0.50 * rawPts[i].ly + 0.25 * rawPts[i + 1].ly;
+          }
+        }
+        for (let i = 1; i < smoothLimit; i++) {
+          const dCorner = rawPts[i].s - cf.s;
+          if (dCorner >= -8.0 && dCorner <= 12.0 && tempRx[i] !== undefined) {
+            rawPts[i].rx = tempRx[i];
+            rawPts[i].ry = tempRy[i];
+            rawPts[i].lx = tempLx[i];
+            rawPts[i].ly = tempLy[i];
+          }
+        }
+      }
+    }
+
+    // 和紙浸透マイクロジッター
+    const strokeSeed = (stroke.index || 1) * 67 + 11;
+    for (let i = 1; i <= smoothLimit; i++) {
+      const p = rawPts[i];
+      const h1 = Math.sin(i * 12.9898 + strokeSeed) * 43758.5453;
+      const jitL = (h1 - Math.floor(h1) - 0.5) * 0.70;
+      const h2 = Math.sin(i * 27.6543 + strokeSeed) * 43758.5453;
+      const jitR = (h2 - Math.floor(h2) - 0.5) * 0.70;
+      p.lx += p.nx * jitL;
+      p.ly += p.ny * jitL;
+      p.rx += p.nx * jitR;
+      p.ry += p.ny * jitR;
+    }
+
+    const compiled = {
+      stroke,
+      behavior,
+      origLen,
+      totalLen,
+      shaftRadius,
+      samples: rawPts,
+      hookFeature,
+      cornerFeatures
+    };
+
+    const limit = rawPts.length - 1;
+    const hf = compiled.hookFeature;
+    const heelIdx = hf ? (hf.heelIdx || Math.max(4, hf.index - 4)) : -1;
+
+    let pathD = "";
+    if (hf && limit > heelIdx) {
+      pathD = traceSmoothStrokeContourPath(compiled, heelIdx, true);
+      const wedgeD = drawFleshyHookWedgePath(compiled, limit, heelIdx);
+      if (wedgeD) pathD += " " + wedgeD;
+    } else {
+      pathD = traceSmoothStrokeContourPath(compiled, limit, false);
+    }
+
+    // 長撇スリット渇筆（Kasure）
+    const kasureD = generateKasureSlitsPath(compiled, limit);
+    if (kasureD) {
+      pathD += " " + kasureD;
+    }
+
+    return pathD;
+  } catch (err) {
+    console.warn("Slender compilation error:", err);
+    return d;
+  }
+}
+
 /**
  * SVG要素の構築（KanjiVG筆画表示を最優先、明朝体・印刷書体を第2モードとして描画）
  */
@@ -882,6 +1724,22 @@ function renderSvgInto(targetElement, visual, tree) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 109 109");
     svg.classList.add("kvg-root");
+
+    // 筆画総数を事前カウント（運筆の物理密度計算用）
+    const totalStrokes = countKvgStrokes(visual.kanjivg) || 10;
+    let strokeCounter = 0;
+
+    // 和紙墨溜まり用SVGフィルター
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    const filter = document.createElementNS("http://www.w3.org/2000/svg", "filter");
+    filter.setAttribute("id", "slender-sumi-pool");
+    filter.setAttribute("x", "-10%");
+    filter.setAttribute("y", "-10%");
+    filter.setAttribute("width", "120%");
+    filter.setAttribute("height", "120%");
+    filter.innerHTML = '<feDropShadow dx="0" dy="0.2" stdDeviation="0.3" flood-color="rgba(24, 18, 12, 0.28)"/>';
+    defs.appendChild(filter);
+    svg.appendChild(defs);
 
     function renderKvgGroup(group, parentTreePath = "") {
       const elem = group.element || group.raw_element || "";
@@ -925,10 +1783,14 @@ function renderSvgInto(targetElement, visual, tree) {
       // 直下の筆画（strokes）を描画：表示用パスと透明太幅ヒット領域パス
       if (strokes.length > 0) {
         strokes.forEach(stroke => {
+          const strokeIdx = strokeCounter++;
+          const calligraphyD = stroke.calligraphy_d || compileSlenderStrokePathD(stroke.d, stroke.type, strokeIdx, totalStrokes);
+
           const visiblePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
           if (stroke.id) visiblePath.setAttribute("id", stroke.id);
-          visiblePath.setAttribute("class", "kvg-stroke");
-          visiblePath.setAttribute("d", stroke.d);
+          visiblePath.setAttribute("class", "kvg-stroke calligraphic-stroke");
+          visiblePath.setAttribute("d", calligraphyD);
+          visiblePath.setAttribute("data-orig-d", stroke.d);
           if (stroke.type) visiblePath.setAttribute("kvg:type", stroke.type);
           g.appendChild(visiblePath);
 
@@ -1140,6 +2002,43 @@ function renderSvgInto(targetElement, visual, tree) {
     if (svgElem) {
       svgElem.removeAttribute("width");
       svgElem.removeAttribute("height");
+
+      // 和紙墨溜まり用SVGフィルター
+      if (!svgElem.querySelector("#slender-sumi-pool")) {
+        let defs = svgElem.querySelector("defs");
+        if (!defs) {
+          defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+          svgElem.insertBefore(defs, svgElem.firstChild);
+        }
+        const filter = document.createElementNS("http://www.w3.org/2000/svg", "filter");
+        filter.setAttribute("id", "slender-sumi-pool");
+        filter.setAttribute("x", "-10%");
+        filter.setAttribute("y", "-10%");
+        filter.setAttribute("width", "120%");
+        filter.setAttribute("height", "120%");
+        filter.innerHTML = '<feDropShadow dx="0" dy="0.2" stdDeviation="0.3" flood-color="rgba(24, 18, 12, 0.28)"/>';
+        defs.appendChild(filter);
+      }
+
+      const strokePaths = Array.from(svgElem.querySelectorAll("path.kvg-stroke"));
+      const totalStrokes = strokePaths.length || 10;
+      strokePaths.forEach((pathEl, strokeIdx) => {
+        const origD = pathEl.getAttribute("d") || "";
+        const type = pathEl.getAttribute("kvg:type") || "";
+        const calligraphyD = compileSlenderStrokePathD(origD, type, strokeIdx, totalStrokes);
+
+        pathEl.setAttribute("d", calligraphyD);
+        pathEl.setAttribute("data-orig-d", origD);
+        pathEl.classList.add("calligraphic-stroke");
+
+        const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        hitPath.setAttribute("class", "kvg-stroke-hit");
+        hitPath.setAttribute("d", origD);
+        if (pathEl.parentNode) {
+          pathEl.parentNode.insertBefore(hitPath, pathEl.nextSibling);
+        }
+      });
+
       attachSvgInteractiveEvents(svgElem);
       targetElement.appendChild(svgElem);
       return;

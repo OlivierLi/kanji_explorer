@@ -2,6 +2,7 @@
 # HTTPサーバープロトコルおよびsqlite3接続で使用されます。
 
 import sqlite3
+import glyph_service
 import server
 from server import KanjiExplorerHandler
 
@@ -18,3 +19,6 @@ server.WSGIHandlerAdapter
 _conn = sqlite3.connect(":memory:")
 _conn.row_factory = sqlite3.Row
 _conn.row_factory
+
+# glyph_service 公開API
+glyph_service.compile_slender_calligraphy_stroke_d

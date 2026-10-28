@@ -82,7 +82,7 @@
   /* 精密方眼（原稿用紙・九宮格）: 控えめで正確なグレー罫線 */
   --grid-line: rgba(0, 0, 0, 0.07);
   --grid-line-bold: rgba(0, 0, 0, 0.16);
-  --grid-bg: #ffffff;
+  --grid-bg: #fcfbfa;
 
   /* スパルタン: ドロップシャドウやグローを廃止 */
   --shadow-sm: none;
@@ -879,6 +879,50 @@ body.audit-view {
 }
 
 .kvg-root.has-hovered-child .kvg-stroke {
+  opacity: 0.20;
+}
+
+/* 瘦金體（Slender Calligraphy）墨筆輪郭 */
+.kvg-stroke.calligraphic-stroke {
+  fill: var(--text-primary);
+  stroke: none;
+  opacity: 0.92;
+  transition: fill 0.12s ease, opacity 0.12s ease;
+  pointer-events: fill;
+  filter: url(#slender-sumi-pool);
+}
+
+/* 瘦金體：ホバー・アクティブ時のストローク強調（鮮明な朱色） */
+.kvg-active-strokes .kvg-stroke.calligraphic-stroke,
+.kvg-stroke.calligraphic-stroke.active-stroke,
+.kvg-root.has-hovered-child .kvg-stroke.calligraphic-stroke.active-stroke,
+.kvg-root.has-locked-scope .kvg-stroke.calligraphic-stroke.active-stroke,
+.kvg-group.hovered .kvg-stroke.calligraphic-stroke,
+.kvg-root.has-hovered-child .kvg-group.hovered .kvg-stroke.calligraphic-stroke,
+.kvg-root.has-locked-scope .kvg-group.hovered .kvg-stroke.calligraphic-stroke {
+  fill: var(--accent-vermilion) !important;
+  stroke: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.kvg-bg-strokes .kvg-stroke.calligraphic-stroke {
+  opacity: 0.20 !important;
+  fill: var(--text-primary) !important;
+  stroke: none !important;
+}
+
+.kvg-root.has-locked-scope .kvg-stroke.calligraphic-stroke {
+  opacity: 0.20;
+}
+
+.kvg-root.has-locked-scope .kvg-group.locked-scope .kvg-stroke.calligraphic-stroke {
+  opacity: 0.95;
+  fill: var(--text-primary);
+  stroke: none;
+}
+
+.kvg-root.has-hovered-child .kvg-stroke.calligraphic-stroke {
   opacity: 0.20;
 }
 

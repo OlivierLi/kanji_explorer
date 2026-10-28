@@ -192,3 +192,71 @@ class TestKanjiVgService:
         # 蛍のトップノードが存在すること
         assert data["id"] == "kvg:086cd"
         assert len(data["children"]) >= 1
+
+    def test_kanjivg_parse_strokes_have_calligraphy_d(self):
+        service = glyph_service._get_default_kanjivg_service()
+        data = service.parse_kanji("永", align_chise=True)
+        assert data is not None
+        strokes = []
+
+        def _collect(n):
+            strokes.extend(n.get("strokes", []))
+            for c in n.get("children", []):
+                _collect(c)
+
+        _collect(data)
+        assert len(strokes) == 5
+        for s in strokes:
+            assert "calligraphy_d" in s
+            assert "type" in s
+            assert s["calligraphy_d"].startswith("M")
+            assert s["calligraphy_d"].endswith("Z")
+
+    def test_extract_kanjivg_stroke_layers_calligraphy_d(self):
+        res = glyph_service.extract_kanjivg_stroke_layers("永")
+        assert res.get("has_kvg") is True
+        all_strokes = res.get("all_strokes", [])
+        assert len(all_strokes) == 5
+        for s in all_strokes:
+            assert "calligraphy_d" in s
+            assert "type" in s
+            assert s["calligraphy_d"].startswith("M")
+            assert s["calligraphy_d"].endswith("Z")
+        kvg_tree = res.get("kvg_tree")
+        assert kvg_tree is not None
+
+
+class TestCalligraphicStrokeEngine:
+    """痩金体(slender)書法物理エンジン単体テスト."""
+
+    def test_compile_slender_horizontal_stroke(self):
+        d = "M10,50 L90,50"
+        calli_d = glyph_service.compile_slender_calligraphy_stroke_d(d, stroke_type="㇐", stroke_index=1, total_strokes=1)
+        assert calli_d.startswith("M")
+        assert calli_d.endswith("Z")
+        assert " " in calli_d
+
+    def test_compile_slender_hook_stroke(self):
+        d = "M50,15 L50,85 L35,75"
+        calli_d = glyph_service.compile_slender_calligraphy_stroke_d(d, stroke_type="㇚", stroke_index=2, total_strokes=5)
+        assert calli_d.startswith("M")
+        assert "Z" in calli_d
+
+    def test_compile_slender_dot_stroke(self):
+        d = "M45.5,13.25c5.12,2.4,8.62,5.75,10.25,8.25"
+        calli_d = glyph_service.compile_slender_calligraphy_stroke_d(d, stroke_type="㇔", stroke_index=1, total_strokes=5)
+        assert calli_d.startswith("M")
+        assert calli_d.endswith("Z")
+
+    def test_compile_slender_empty_fallback(self):
+        assert glyph_service.compile_slender_calligraphy_stroke_d("") == ""
+        assert glyph_service.compile_slender_calligraphy_stroke_d("M0,0") == "M0,0"
+
+    def test_compile_slender_lru_caching(self):
+        d = "M20,20 C40,40 60,40 80,20"
+        res1 = glyph_service.compile_slender_calligraphy_stroke_d(d, "㇐", 1, 1)
+        info_after1 = glyph_service.compile_slender_calligraphy_stroke_d.cache_info()
+        res2 = glyph_service.compile_slender_calligraphy_stroke_d(d, "㇐", 1, 1)
+        info_after2 = glyph_service.compile_slender_calligraphy_stroke_d.cache_info()
+        assert res1 == res2
+        assert info_after2.hits > info_after1.hits

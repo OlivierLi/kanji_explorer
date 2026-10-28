@@ -9,10 +9,12 @@ Jigmoフォントからの正確なベクターアウトライン抽出、CHISE 
 from __future__ import annotations
 
 from collections import defaultdict
+import bisect
 import functools
 import glob
 import gzip
 import html
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -1188,6 +1190,882 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
     )
 
 
+# ---------------------------------------------------------------------------
+# 書道ストローク輪郭コンパイラ（痩金体 / Slender プリセット物理エンジン）
+# ---------------------------------------------------------------------------
+
+class _CalligraphyRawPt:
+    """書道物理エンジンで使用するサンプリング点データ構造。"""
+    __slots__ = (
+        "s", "u", "svgX", "svgY", "x", "y",
+        "turnAngle", "turnSign", "tx", "ty", "nx", "ny",
+        "lx", "ly", "rx", "ry"
+    )
+
+    def __init__(self, s: float, u: float, svgX: float, svgY: float) -> None:
+        self.s = s
+        self.u = u
+        self.svgX = svgX
+        self.svgY = svgY
+        self.x = svgX
+        self.y = svgY
+        self.turnAngle = 0.0
+        self.turnSign = 1
+        self.tx = 0.0
+        self.ty = 0.0
+        self.nx = 0.0
+        self.ny = 0.0
+        self.lx = 0.0
+        self.ly = 0.0
+        self.rx = 0.0
+        self.ry = 0.0
+
+
+def _classify_calligraphy_stroke_behavior(stroke_type: str = "", stroke_name: str = "") -> dict[str, bool]:
+    """筆画タイプおよび名称から運筆挙動（鉤、撥ね、止め、払い等）を分類します。"""
+    t = (stroke_type or "").strip()
+    name = (stroke_name or "").lower()
+
+    is_hook = (
+        "㇚" in t or "㇈" in t or "㇂" in t or "㇆" in t or "㇖" in t or "㇟" in t or "㇡" in t
+        or "gōu" in name or "鉤" in name or "钩" in name
+    )
+    is_rising_ti = "㇀" in t or "tí" in name or "提" in name
+    is_right_na = ("㇏" in t or "nà" in name or "捺" in name) and ("㇔" not in t)
+    is_dot = ("㇔" in t or "diǎn" in name or "点" in name) and (not is_right_na) and (not is_rising_ti)
+    is_sweep_end = (not is_hook) and (not is_dot) and (not is_right_na) and (
+        "㇒" in t or "㇇" in t or is_rising_ti or "piě" in name or "撇" in name
+    )
+    is_fold = (
+        "㇕" in t or "㇄" in t or "㇈" in t or "㇆" in t or "㇇" in t or "㇖" in t
+        or "zhé" in name or "折" in name
+    )
+    is_horizontal = "㇐" in t or "héng" in name or "横" in name
+    is_vertical = "㇑" in t or "shù" in name or "竪" in name or "竖" in name
+    is_connecting_vertical = "㇑a" in t
+
+    return {
+        "isSweepEnd": is_sweep_end,
+        "isRisingTi": is_rising_ti,
+        "isRightNa": is_right_na,
+        "isDot": is_dot,
+        "isHook": is_hook,
+        "isFold": is_fold,
+        "isHorizontal": is_horizontal,
+        "isVertical": is_vertical,
+        "isConnectingVertical": is_connecting_vertical,
+    }
+
+
+def _chaikin_smooth_open_chain(pts: list[tuple[float, float]], iterations: int = 2) -> list[tuple[float, float]]:
+    """Chaikinアルゴリズムによる開曲線の角丸めスムージングを行います。"""
+    curr = pts
+    for _ in range(iterations):
+        if len(curr) < 3:
+            break
+        next_pts = [curr[0]]
+        for i in range(len(curr) - 1):
+            p0 = curr[i]
+            p1 = curr[i + 1]
+            next_pts.append((0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]))
+            next_pts.append((0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]))
+        next_pts.append(curr[-1])
+        curr = next_pts
+    return curr
+
+
+def _sample_line_points(x0: float, y0: float, x1: float, y1: float, max_len: float, out: list[tuple[float, float]]) -> None:
+    dist = math.hypot(x1 - x0, y1 - y0)
+    steps = max(1, math.ceil(dist / max_len))
+    for step in range(1, steps + 1):
+        t = step / steps
+        out.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
+
+
+def _sample_cubic_points(x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float, max_len: float, out: list[tuple[float, float]]) -> None:
+    chord = math.hypot(x3 - x0, y3 - y0)
+    poly = math.hypot(x1 - x0, y1 - y0) + math.hypot(x2 - x1, y2 - y1) + math.hypot(x3 - x2, y3 - y2)
+    est_len = (chord + poly) * 0.5
+    steps = max(4, math.ceil(est_len / max_len))
+    for step in range(1, steps + 1):
+        t = step / steps
+        it = 1.0 - t
+        x = it * it * it * x0 + 3 * it * it * t * x1 + 3 * it * t * t * x2 + t * t * t * x3
+        y = it * it * it * y0 + 3 * it * it * t * y1 + 3 * it * t * t * y2 + t * t * t * y3
+        out.append((x, y))
+
+
+def _sample_quad_points(x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, max_len: float, out: list[tuple[float, float]]) -> None:
+    chord = math.hypot(x2 - x0, y2 - y0)
+    poly = math.hypot(x1 - x0, y1 - y0) + math.hypot(x2 - x1, y2 - y1)
+    est_len = (chord + poly) * 0.5
+    steps = max(4, math.ceil(est_len / max_len))
+    for step in range(1, steps + 1):
+        t = step / steps
+        it = 1.0 - t
+        x = it * it * x0 + 2 * it * t * x1 + t * t * x2
+        y = it * it * y0 + 2 * it * t * y1 + t * t * x2
+        out.append((x, y))
+
+
+def _sample_svg_path_dense(d: str, max_segment_len: float = 0.2) -> list[tuple[float, float]]:
+    """SVGパス文字列を密にサンプリングしてポリライン点列に分解します。"""
+    tokens = re.findall(r"([MmLlHhVvCcSsQqTtZz])|([-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?)", d)
+    cur_x, cur_y = 0.0, 0.0
+    start_x, start_y = 0.0, 0.0
+    last_cp: tuple[float, float] | None = None
+    last_cmd = ""
+    dense_pts: list[tuple[float, float]] = []
+    i = 0
+    cmd = ""
+
+    def next_float() -> float:
+        nonlocal i
+        if i >= len(tokens):
+            return 0.0
+        val = float(tokens[i][1])
+        i += 1
+        return val
+
+    while i < len(tokens):
+        t_cmd, _ = tokens[i]
+        if t_cmd:
+            cmd = t_cmd
+            i += 1
+            if cmd in ("Z", "z"):
+                if cur_x != start_x or cur_y != start_y:
+                    _sample_line_points(cur_x, cur_y, start_x, start_y, max_segment_len, dense_pts)
+                    cur_x, cur_y = start_x, start_y
+                last_cp = None
+                last_cmd = "Z"
+                continue
+
+        if cmd == "M":
+            cur_x = next_float()
+            cur_y = next_float()
+            start_x, start_y = cur_x, cur_y
+            dense_pts.append((cur_x, cur_y))
+            last_cp = None
+            cmd = "L"
+        elif cmd == "m":
+            cur_x += next_float()
+            cur_y += next_float()
+            start_x, start_y = cur_x, cur_y
+            dense_pts.append((cur_x, cur_y))
+            last_cp = None
+            cmd = "l"
+        elif cmd == "L":
+            x = next_float()
+            y = next_float()
+            _sample_line_points(cur_x, cur_y, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = None
+            last_cmd = "L"
+        elif cmd == "l":
+            x = cur_x + next_float()
+            y = cur_y + next_float()
+            _sample_line_points(cur_x, cur_y, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = None
+            last_cmd = "l"
+        elif cmd == "H":
+            x = next_float()
+            _sample_line_points(cur_x, cur_y, x, cur_y, max_segment_len, dense_pts)
+            cur_x = x
+            last_cp = None
+            last_cmd = "H"
+        elif cmd == "h":
+            x = cur_x + next_float()
+            _sample_line_points(cur_x, cur_y, x, cur_y, max_segment_len, dense_pts)
+            cur_x = x
+            last_cp = None
+            last_cmd = "h"
+        elif cmd == "V":
+            y = next_float()
+            _sample_line_points(cur_x, cur_y, cur_x, y, max_segment_len, dense_pts)
+            cur_y = y
+            last_cp = None
+            last_cmd = "V"
+        elif cmd == "v":
+            y = cur_y + next_float()
+            _sample_line_points(cur_x, cur_y, cur_x, y, max_segment_len, dense_pts)
+            cur_y = y
+            last_cp = None
+            last_cmd = "v"
+        elif cmd == "C":
+            x1 = next_float()
+            y1 = next_float()
+            x2 = next_float()
+            y2 = next_float()
+            x = next_float()
+            y = next_float()
+            _sample_cubic_points(cur_x, cur_y, x1, y1, x2, y2, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x2, y2)
+            last_cmd = "C"
+        elif cmd == "c":
+            x1 = cur_x + next_float()
+            y1 = cur_y + next_float()
+            x2 = cur_x + next_float()
+            y2 = cur_y + next_float()
+            x = cur_x + next_float()
+            y = cur_y + next_float()
+            _sample_cubic_points(cur_x, cur_y, x1, y1, x2, y2, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x2, y2)
+            last_cmd = "C"
+        elif cmd == "S":
+            if last_cmd in ("C", "S") and last_cp is not None:
+                x1 = 2 * cur_x - last_cp[0]
+                y1 = 2 * cur_y - last_cp[1]
+            else:
+                x1, y1 = cur_x, cur_y
+            x2 = next_float()
+            y2 = next_float()
+            x = next_float()
+            y = next_float()
+            _sample_cubic_points(cur_x, cur_y, x1, y1, x2, y2, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x2, y2)
+            last_cmd = "S"
+        elif cmd == "s":
+            if last_cmd in ("C", "S") and last_cp is not None:
+                x1 = 2 * cur_x - last_cp[0]
+                y1 = 2 * cur_y - last_cp[1]
+            else:
+                x1, y1 = cur_x, cur_y
+            x2 = cur_x + next_float()
+            y2 = cur_y + next_float()
+            x = cur_x + next_float()
+            y = cur_y + next_float()
+            _sample_cubic_points(cur_x, cur_y, x1, y1, x2, y2, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x2, y2)
+            last_cmd = "S"
+        elif cmd == "Q":
+            x1 = next_float()
+            y1 = next_float()
+            x = next_float()
+            y = next_float()
+            _sample_quad_points(cur_x, cur_y, x1, y1, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x1, y1)
+            last_cmd = "Q"
+        elif cmd == "q":
+            x1 = cur_x + next_float()
+            y1 = cur_y + next_float()
+            x = cur_x + next_float()
+            y = cur_y + next_float()
+            _sample_quad_points(cur_x, cur_y, x1, y1, x, y, max_segment_len, dense_pts)
+            cur_x, cur_y = x, y
+            last_cp = (x1, y1)
+            last_cmd = "Q"
+        else:
+            break
+
+    return dense_pts
+
+
+def _trace_smooth_stroke_contour_svg(
+    pts: list[_CalligraphyRawPt],
+    behavior: dict[str, bool],
+    hook_feature: dict[str, Any] | None,
+    limit_idx: int,
+    is_hook_truncated: bool = False,
+) -> str:
+    """左右境界サンプル点列からChaikinスムージングを行い閉じたSVG輪郭パスを生成します。"""
+    if not pts or limit_idx < 1:
+        return ""
+
+    is_sharp_tip = behavior["isSweepEnd"] or behavior["isRightNa"]
+    is_up_hook = hook_feature["isUpwardHook"] if hook_feature else False
+    left_limit = max(2, limit_idx - 5) if (is_hook_truncated and not is_up_hook) else limit_idx
+    right_limit = max(2, limit_idx - 5) if (is_hook_truncated and is_up_hook) else limit_idx
+
+    left_chain = [(pts[i].lx, pts[i].ly) for i in range(left_limit + 1)]
+    right_chain = [(pts[i].rx, pts[i].ry) for i in range(right_limit + 1)]
+
+    smooth_l = _chaikin_smooth_open_chain(left_chain, 2)
+    smooth_r = _chaikin_smooth_open_chain(right_chain, 2)
+
+    parts: list[str] = [f"M {smooth_l[0][0]:.2f} {smooth_l[0][1]:.2f}"]
+    for pt in smooth_l[1:]:
+        parts.append(f"L {pt[0]:.2f} {pt[1]:.2f}")
+
+    last_l = smooth_l[-1]
+    last_r = smooth_r[-1]
+    end_pt = pts[limit_idx]
+
+    if is_hook_truncated:
+        parts.append(f"L {last_r[0]:.2f} {last_r[1]:.2f}")
+    elif is_sharp_tip and limit_idx >= len(pts) - 2:
+        tip_x = (last_l[0] + last_r[0]) * 0.5 + end_pt.tx * 3.5
+        tip_y = (last_l[1] + last_r[1]) * 0.5 + end_pt.ty * 3.5
+        parts.append(f"L {tip_x:.2f} {tip_y:.2f}")
+        parts.append(f"L {last_r[0]:.2f} {last_r[1]:.2f}")
+    elif behavior["isDot"]:
+        end_mid_x = (last_l[0] + last_r[0]) * 0.5
+        end_mid_y = (last_l[1] + last_r[1]) * 0.5
+        cap_span = math.hypot(last_l[0] - last_r[0], last_l[1] - last_r[1]) * 0.48
+        cx = end_mid_x + end_pt.tx * cap_span
+        cy = end_mid_y + end_pt.ty * cap_span
+        parts.append(f"Q {cx:.2f} {cy:.2f} {last_r[0]:.2f} {last_r[1]:.2f}")
+    else:
+        end_mid_x = (last_l[0] + last_r[0]) * 0.5
+        end_mid_y = (last_l[1] + last_r[1]) * 0.5
+        cap_span = math.hypot(last_l[0] - last_r[0], last_l[1] - last_r[1]) * 0.35
+        cx = end_mid_x + end_pt.tx * cap_span
+        cy = end_mid_y + end_pt.ty * cap_span
+        parts.append(f"Q {cx:.2f} {cy:.2f} {last_r[0]:.2f} {last_r[1]:.2f}")
+
+    for i in range(len(smooth_r) - 2, -1, -1):
+        parts.append(f"L {smooth_r[i][0]:.2f} {smooth_r[i][1]:.2f}")
+
+    # 起筆部：約45度傾斜筆先キャップ
+    first_l = smooth_l[0]
+    first_r = smooth_r[0]
+    p0 = pts[0]
+    entry_ratio = 0.32 if behavior["isDot"] else 0.25
+    entry_span = math.hypot(first_l[0] - first_r[0], first_l[1] - first_r[1]) * entry_ratio
+    cp1x = first_r[0] - p0.tx * (entry_span * 0.4)
+    cp1y = first_r[1] - p0.ty * (entry_span * 0.4)
+    cp2x = first_l[0] - p0.tx * (entry_span * 0.4)
+    cp2y = first_l[1] - p0.ty * (entry_span * 0.4)
+    parts.append(f"C {cp1x:.2f} {cp1y:.2f} {cp2x:.2f} {cp2y:.2f} {first_l[0]:.2f} {first_l[1]:.2f}")
+    parts.append("Z")
+
+    return " ".join(parts)
+
+
+def _draw_fleshy_hook_wedge_svg(
+    pts: list[_CalligraphyRawPt],
+    shaft_radius: float,
+    ton_strength: float,
+    hook_feature: dict[str, Any],
+    limit_idx: int,
+    heel_idx: int,
+) -> str:
+    """肉厚な鉤（かぎ・ハネ）の三角ウェッジSVGパスを生成します。"""
+    H = pts[heel_idx]
+    r = shaft_radius * (1.08 * ton_strength)
+    stx = H.tx
+    sty = H.ty
+
+    parts: list[str] = []
+
+    if hook_feature["isUpwardHook"]:
+        outer_idx = max(2, heel_idx - 6)
+        inner_idx = max(2, heel_idx - 6)
+
+        tip_x = H.x + r * 0.35
+        tip_y = H.y - r * 3.0
+
+        heel_bottom_x = H.x + r * 1.15
+        heel_bottom_y = H.y + r * 0.95
+
+        parts.append(f"M {pts[outer_idx].lx:.2f} {pts[outer_idx].ly:.2f}")
+        for k in range(outer_idx + 1, heel_idx + 1):
+            parts.append(f"L {pts[k].lx:.2f} {pts[k].ly:.2f}")
+
+        c1x = pts[heel_idx].lx + r * 0.45
+        c1y = H.y + r * 1.05
+        parts.append(f"Q {c1x:.2f} {c1y:.2f} {heel_bottom_x:.2f} {heel_bottom_y:.2f}")
+
+        c2x = H.x + r * 1.35
+        c2y = H.y - r * 0.45
+        parts.append(f"Q {c2x:.2f} {c2y:.2f} {tip_x:.2f} {tip_y:.2f}")
+
+        c3x = pts[heel_idx].rx + r * 0.05
+        c3y = H.y - r * 0.55
+        parts.append(f"Q {c3x:.2f} {c3y:.2f} {pts[inner_idx].rx:.2f} {pts[inner_idx].ry:.2f}")
+
+        parts.append("Z")
+    else:
+        ux = -0.93
+        uy = -0.36
+        hook_len = r * 3.15
+
+        if hook_feature["isDownLeftHook"]:
+            ux = -0.68
+            uy = 0.73
+            hook_len = r * 2.5
+
+        flick_progress = (limit_idx - heel_idx) / max(1, len(pts) - 1 - heel_idx)
+        cur_len = max(r * 1.6, hook_len * min(1.0, flick_progress * 1.15))
+
+        tip_x = H.x + ux * cur_len
+        tip_y = H.y + uy * cur_len
+
+        outer_idx = max(2, heel_idx - 6)
+        inner_idx = max(2, heel_idx - 5)
+
+        heel_bottom_x = H.x + stx * r * 1.15
+        heel_bottom_y = H.y + sty * r * 1.15
+
+        parts.append(f"M {pts[outer_idx].rx:.2f} {pts[outer_idx].ry:.2f}")
+        for k in range(outer_idx + 1, heel_idx + 1):
+            parts.append(f"L {pts[k].rx:.2f} {pts[k].ry:.2f}")
+
+        c1x = pts[heel_idx].rx + stx * r * 0.9
+        c1y = pts[heel_idx].ry + sty * r * 0.9
+        parts.append(f"Q {c1x:.2f} {c1y:.2f} {heel_bottom_x:.2f} {heel_bottom_y:.2f}")
+
+        c2x = H.x + ux * cur_len * 0.42 + stx * r * 0.65
+        c2y = H.y + uy * cur_len * 0.42 + sty * r * 0.65
+        parts.append(f"Q {c2x:.2f} {c2y:.2f} {tip_x:.2f} {tip_y:.2f}")
+
+        c3x = pts[inner_idx].lx - r * 0.45
+        c3y = (tip_y + pts[inner_idx].ly) * 0.5 + r * 0.20
+        parts.append(f"Q {c3x:.2f} {c3y:.2f} {pts[inner_idx].lx:.2f} {pts[inner_idx].ly:.2f}")
+
+        parts.append("Z")
+
+    return " ".join(parts)
+
+
+@functools.lru_cache(maxsize=16384)
+def compile_slender_calligraphy_stroke_d(
+    stroke_d: str,
+    stroke_type: str = "",
+    stroke_index: int = 1,
+    total_strokes: int = 10,
+) -> str:
+    """KanjiVG筆画パス(d)を痩金体(slender)書法物理エンジンに基づき閉じた書道輪郭SVGパスにコンパイルします。"""
+    if not stroke_d or not stroke_d.strip():
+        return stroke_d
+
+    try:
+        dense_pts = _sample_svg_path_dense(stroke_d, max_segment_len=0.2)
+        if len(dense_pts) < 2:
+            return stroke_d
+
+        cum_lens = [0.0]
+        for i in range(1, len(dense_pts)):
+            d_len = math.hypot(dense_pts[i][0] - dense_pts[i - 1][0], dense_pts[i][1] - dense_pts[i - 1][1])
+            cum_lens.append(cum_lens[-1] + d_len)
+        total_dense_len = cum_lens[-1]
+        orig_len = max(0.1, total_dense_len)
+
+        def get_point_at_length(s: float) -> tuple[float, float]:
+            if s <= 0.0:
+                return dense_pts[0]
+            if s >= total_dense_len:
+                return dense_pts[-1]
+            idx = bisect.bisect_right(cum_lens, s)
+            if idx == 0:
+                return dense_pts[0]
+            if idx >= len(dense_pts):
+                return dense_pts[-1]
+            s0 = cum_lens[idx - 1]
+            s1 = cum_lens[idx]
+            seg = s1 - s0
+            if seg <= 1e-9:
+                return dense_pts[idx]
+            t = (s - s0) / seg
+            p0 = dense_pts[idx - 1]
+            p1 = dense_pts[idx]
+            return (p0[0] + t * (p1[0] - p0[0]), p0[1] + t * (p1[1] - p0[1]))
+
+        step = 0.28
+        num_samples = max(32, math.ceil(orig_len / step))
+        raw_pts: list[_CalligraphyRawPt] = []
+        for i in range(num_samples + 1):
+            s = (i / num_samples) * orig_len
+            px, py = get_point_at_length(s)
+            raw_pts.append(_CalligraphyRawPt(s, i / num_samples, px, py))
+
+        behavior = _classify_calligraphy_stroke_behavior(stroke_type, "")
+
+        # 起筆方向アライメント（点以外の不要な突き出し・ベクトルトゲを除去）
+        if not behavior["isDot"] and len(raw_pts) > 8 and orig_len > 8:
+            anchor_s = min(orig_len * 0.20, 2.8)
+            look_s = min(orig_len * 0.42, 5.5)
+            anchor_idx = min(num_samples - 2, max(2, round((anchor_s / orig_len) * num_samples)))
+            look_idx = min(num_samples, max(anchor_idx + 2, round((look_s / orig_len) * num_samples)))
+
+            shaft_dx = raw_pts[look_idx].svgX - raw_pts[anchor_idx].svgX
+            shaft_dy = raw_pts[look_idx].svgY - raw_pts[anchor_idx].svgY
+            shaft_mag = math.hypot(shaft_dx, shaft_dy) or 1.0
+            stx = shaft_dx / shaft_mag
+            sty = shaft_dy / shaft_mag
+
+            for i in range(anchor_idx):
+                blend = (1.0 - (i / anchor_idx)) ** 0.85
+                dist_back = raw_pts[anchor_idx].s - raw_pts[i].s
+                proj_x = raw_pts[anchor_idx].svgX - stx * dist_back
+                proj_y = raw_pts[anchor_idx].svgY - sty * dist_back
+                raw_pts[i].svgX = raw_pts[i].svgX * (1.0 - 0.95 * blend) + proj_x * (0.95 * blend)
+                raw_pts[i].svgY = raw_pts[i].svgY * (1.0 - 0.95 * blend) + proj_y * (0.95 * blend)
+
+        # スライディングウィンドウによる屈曲角解析
+        win = max(2, round(2.0 / step))
+        for i in range(num_samples + 1):
+            if win <= i <= num_samples - win:
+                vx1 = raw_pts[i].svgX - raw_pts[i - win].svgX
+                vy1 = raw_pts[i].svgY - raw_pts[i - win].svgY
+                vx2 = raw_pts[i + win].svgX - raw_pts[i].svgX
+                vy2 = raw_pts[i + win].svgY - raw_pts[i].svgY
+                m1 = math.hypot(vx1, vy1) or 1.0
+                m2 = math.hypot(vx2, vy2) or 1.0
+                dot = max(-1.0, min(1.0, (vx1 * vx2 + vy1 * vy2) / (m1 * m2)))
+                raw_pts[i].turnAngle = math.acos(dot)
+                raw_pts[i].turnSign = 1 if (vx1 * vy2 - vy1 * vx2) >= 0 else -1
+            else:
+                raw_pts[i].turnAngle = 0.0
+                raw_pts[i].turnSign = 1
+
+        # 鉤（ハネ）頂点検出とフリック方向判定
+        hook_feature = None
+        if behavior["isHook"] and orig_len > 13:
+            search_start = math.floor(num_samples * 0.65)
+            best_idx = -1
+            max_turn = 0.28
+            for i in range(search_start, num_samples - 1):
+                if raw_pts[i].turnAngle > max_turn:
+                    max_turn = raw_pts[i].turnAngle
+                    best_idx = i
+            max_y = -float("inf")
+            max_y_idx = -1
+            for i in range(search_start, num_samples):
+                if raw_pts[i].svgY > max_y:
+                    max_y = raw_pts[i].svgY
+                    max_y_idx = i
+            if max_y_idx > search_start and max_y - raw_pts[num_samples].svgY > 0.8:
+                best_idx = max_y_idx
+            if best_idx == -1:
+                best_idx = math.floor(num_samples * 0.84)
+
+            apex_pt = raw_pts[best_idx]
+            end_pt = raw_pts[num_samples]
+            fdx = end_pt.svgX - apex_pt.svgX
+            fdy = end_pt.svgY - apex_pt.svgY
+
+            is_down_left_hook = (fdx < -0.2 and fdy > 0.2)
+            is_vertical_left_hook = (not is_down_left_hook and fdx < -0.2)
+            is_upward_hook = (not is_down_left_hook and not is_vertical_left_hook)
+
+            if is_vertical_left_hook:
+                hook_ux = -0.92
+                hook_uy = -0.39
+            elif is_upward_hook:
+                hook_uy = -0.988
+                hook_ux = 0.15
+            else:
+                hook_ux = -0.68
+                hook_uy = 0.73
+
+            heel_idx = max(4, best_idx - 4)
+            hook_feature = {
+                "index": best_idx,
+                "heelIdx": heel_idx,
+                "u": raw_pts[best_idx].u,
+                "s": raw_pts[best_idx].s,
+                "angle": max(1.3, raw_pts[best_idx].turnAngle),
+                "isUpwardHook": is_upward_hook,
+                "isVerticalLeftHook": is_vertical_left_hook,
+                "isDownLeftHook": is_down_left_hook,
+                "flickUx": hook_ux,
+                "flickUy": hook_uy,
+            }
+
+        # 折れ曲がり（コーナー）検出（鉤領域を除く）
+        corner_features = []
+        min_corner_s = 5.0
+        max_corner_s = (hook_feature["s"] - 6.5) if hook_feature else (orig_len - 4.5)
+        min_sep = max(6, round(7.0 / step))
+
+        for i in range(win + 2, num_samples - win - 1):
+            s = raw_pts[i].s
+            if s < min_corner_s or s > max_corner_s:
+                continue
+            a = raw_pts[i].turnAngle
+            if a > 0.55:
+                is_peak = True
+                for k in range(-min_sep, min_sep + 1):
+                    if k != 0 and 0 <= i + k <= num_samples and raw_pts[i + k].turnAngle > a:
+                        is_peak = False
+                        break
+                if is_peak:
+                    corner_features.append({
+                        "index": i,
+                        "u": raw_pts[i].u,
+                        "s": raw_pts[i].s,
+                        "angle": a,
+                        "turnSign": raw_pts[i].turnSign,
+                    })
+
+        # 累積弧長と正規化パラメータuの再計算 (boxX=0, boxY=0, scale=1.0)
+        cum_s = 0.0
+        for i in range(num_samples + 1):
+            if i > 0:
+                cum_s += math.hypot(raw_pts[i].svgX - raw_pts[i - 1].svgX, raw_pts[i].svgY - raw_pts[i - 1].svgY)
+            raw_pts[i].s = cum_s
+            raw_pts[i].x = raw_pts[i].svgX
+            raw_pts[i].y = raw_pts[i].svgY
+        total_len = max(0.1, cum_s)
+        for i in range(num_samples + 1):
+            raw_pts[i].u = raw_pts[i].s / total_len
+        if hook_feature:
+            hook_feature["s"] = raw_pts[hook_feature["index"]].s
+            hook_feature["u"] = raw_pts[hook_feature["index"]].u
+        for cf in corner_features:
+            cf["s"] = raw_pts[cf["index"]].s
+            cf["u"] = raw_pts[cf["index"]].u
+
+        # 接線ベクトル・法線ベクトルの算出
+        for i in range(num_samples + 1):
+            i_prev = max(0, i - 4)
+            i_next = min(num_samples, i + 4)
+            if hook_feature:
+                if i <= hook_feature["index"] < i_next:
+                    i_next = hook_feature["index"]
+                if i >= hook_feature["index"] > i_prev:
+                    i_prev = hook_feature["index"]
+            if i_prev == i_next:
+                i_prev = max(0, i - 1)
+                i_next = min(num_samples, i + 1)
+            dx = raw_pts[i_next].x - raw_pts[i_prev].x
+            dy = raw_pts[i_next].y - raw_pts[i_prev].y
+            mag = math.hypot(dx, dy) or 1.0
+            raw_pts[i].tx = dx / mag
+            raw_pts[i].ty = dy / mag
+            raw_pts[i].nx = -raw_pts[i].ty
+            raw_pts[i].ny = raw_pts[i].tx
+
+        init_tx = raw_pts[0].tx
+        init_ty = raw_pts[0].ty
+        is_down_entry = init_ty > 0.48 and abs(init_tx) < 0.85
+        is_right_to_left_sweep = init_tx < -0.42
+
+        # 痩金体（slender）プリセットパラメータ
+        density_scale = 0.95 if total_strokes >= 13 else (1.04 if total_strokes >= 9 else 1.14)
+        curve_weight_boost = 1.15 if (behavior["isSweepEnd"] or behavior["isHook"] or behavior["isRightNa"]) else 1.05
+        box_size = 109.0
+        thickness = 0.86
+        ton_strength = 1.08
+        waist_ratio = 0.80
+
+        shaft_radius = (box_size * 0.024) * thickness * density_scale * curve_weight_boost
+        ton_mult = ton_strength
+        waist_mult = waist_ratio
+
+        # 幅エンベロープ（wL, wR）の計算
+        for i in range(num_samples + 1):
+            p = raw_pts[i]
+            u = p.u
+            s = p.s
+
+            w_l = 1.0
+            w_r = 1.0
+            shift_l = 0.0
+            shift_r = 0.0
+            corner_disp_lx = 0.0
+            corner_disp_ly = 0.0
+            corner_disp_rx = 0.0
+            corner_disp_ry = 0.0
+
+            if behavior["isDot"]:
+                arch = math.sin((u ** 0.82) * (math.pi * 0.72))
+                w_l = 0.28 + (1.05 * ton_mult) * arch
+                w_r = 0.26 + (0.90 * ton_mult) * arch
+            elif behavior["isRisingTi"]:
+                head_zone = min(5.5, total_len * 0.28)
+                if s < head_zone:
+                    t = s / head_zone
+                    blend = 0.5 * (1.0 + math.cos(t * math.pi))
+                    w_l = 0.88 + (0.42 * ton_mult) * blend
+                    w_r = 0.88 + (0.75 * ton_mult) * blend
+                else:
+                    t = (s - head_zone) / max(0.1, total_len - head_zone)
+                    taper = max(0.06, 1.0 - t * 0.94) ** 0.85
+                    w_l = 0.88 * taper
+                    w_r = (0.88 + 0.25 * ton_mult) * taper
+            elif behavior["isRightNa"]:
+                if u <= 0.68:
+                    t = u / 0.68
+                    swell = math.sin(t * math.pi * 0.5)
+                    w_l = 0.32 + (0.95 * ton_mult - 0.32) * swell
+                    w_r = 0.32 + (1.42 * ton_mult - 0.32) * swell
+                else:
+                    t_foot = (u - 0.68) / 0.32
+                    decay = math.cos(t_foot * math.pi * 0.5) ** 1.5
+                    w_l = max(0.02, (0.95 * ton_mult) * decay)
+                    w_r = max(0.02, (1.42 * ton_mult) * decay)
+            else:
+                waist_arch = math.sin(u * math.pi)
+                shaft_tension = 1.0 - (1.0 - waist_mult) * 0.65 * waist_arch
+                w_l = shaft_tension
+                w_r = shaft_tension
+
+                head_len = min(total_len * 0.22, 6.0)
+                if s < head_len:
+                    u_entry = s / head_len
+                    entry_swell = math.sin(u_entry * math.pi * 0.5)
+                    entry_width_factor = 0.68 + (1.0 - 0.68) * entry_swell
+                    blend = 0.5 * (1.0 + math.cos(u_entry * math.pi))
+
+                    if is_down_entry:
+                        w_l += (0.38 * ton_mult) * blend
+                        w_r += (0.16 * ton_mult) * blend
+                        shift_l -= (0.10 * blend) * entry_swell
+                    elif is_right_to_left_sweep:
+                        w_r += (0.36 * ton_mult) * blend
+                        w_l += (0.20 * ton_mult) * blend
+                        shift_l -= (0.12 * blend) * entry_swell
+                    else:
+                        w_l = shaft_tension * (0.96 + 0.08 * blend)
+                        w_r = shaft_tension * (1.02 + 0.14 * blend)
+                        shift_l = (-0.48 * blend) * entry_swell
+                        shift_r = (+0.22 * blend) * entry_swell
+                    w_l *= entry_width_factor
+                    w_r *= entry_width_factor
+
+                for cf in corner_features:
+                    d = s - cf["s"]
+                    if -5.0 <= d <= 5.0:
+                        t_inner = d / 3.6
+                        bell_inner = 0.5 * (1.0 + math.cos(t_inner * math.pi)) if abs(t_inner) <= 1.0 else 0.0
+                        if cf["turnSign"] >= 0:
+                            w_l = max(0.68, w_l - 0.10 * bell_inner)
+                        else:
+                            w_r = max(0.68, w_r - 0.10 * bell_inner)
+
+                if hook_feature:
+                    hs = hook_feature["s"]
+                    ds_hook = s - hs
+                    if ds_hook <= 0:
+                        d_heel = -ds_hook
+                        if d_heel < 7.0:
+                            t_heel = d_heel / 7.0
+                            heel_bell = 0.5 * (1.0 + math.cos(t_heel * math.pi))
+                            outer_is_l = (hook_feature["flickUx"] < 0 and p.tx < 0.3) or (hook_feature["flickUy"] < -0.5 and p.turnSign < 0)
+                            if outer_is_l:
+                                w_l += (0.24 * ton_mult) * heel_bell
+                                w_r = min(w_r, shaft_tension * (1.0 - 0.20 * heel_bell))
+                            else:
+                                w_r += (0.24 * ton_mult) * heel_bell
+                                w_l = min(w_l, shaft_tension * (1.0 - 0.20 * heel_bell))
+                elif behavior["isSweepEnd"]:
+                    sweep_start = 0.38 if is_right_to_left_sweep else 0.44
+                    if u > sweep_start:
+                        t_sweep = (u - sweep_start) / (1.0 - sweep_start)
+                        taper = max(0.02, 1.0 - t_sweep * 0.98) ** 0.78
+                        w_l *= taper
+                        w_r *= taper
+                elif behavior["isVertical"] and not behavior["isFold"]:
+                    end_dist = total_len - s
+                    tome_zone = min(5.5, total_len * 0.28)
+                    if end_dist < tome_zone:
+                        t = 1.0 - (end_dist / tome_zone)
+                        smooth_t = 3.0 * t * t - 2.0 * t * t * t
+                        if behavior["isConnectingVertical"]:
+                            w_l += (0.15 * ton_mult) * smooth_t
+                            w_r += (0.15 * ton_mult) * smooth_t
+                        else:
+                            w_l += (0.30 * ton_mult) * smooth_t
+                            w_r += (0.30 * ton_mult) * smooth_t
+                else:
+                    end_dist = total_len - s
+                    tome_zone = min(5.5, total_len * 0.28)
+                    if end_dist < tome_zone:
+                        t = 1.0 - (end_dist / tome_zone)
+                        smooth_t = 3.0 * t * t - 2.0 * t * t * t
+                        w_l += (0.30 * ton_mult) * smooth_t
+                        w_r += (0.48 * ton_mult) * smooth_t
+                        shift_r += 0.16 * smooth_t
+
+            r_l = shaft_radius * w_l
+            r_r = shaft_radius * w_r
+
+            p.lx = p.x + p.nx * r_l + p.tx * (shift_l * shaft_radius) + corner_disp_lx
+            p.ly = p.y + p.ny * r_l + p.ty * (shift_l * shaft_radius) + corner_disp_ly
+            p.rx = p.x - p.nx * r_r + p.tx * (shift_r * shaft_radius) + corner_disp_rx
+            p.ry = p.y - p.ny * r_r + p.ty * (shift_r * shaft_radius) + corner_disp_ry
+
+        # ラプラシアンスムージング（鉤頂点手前まで）
+        smooth_limit = hook_feature["index"] if hook_feature else num_samples - 1
+        for _ in range(2):
+            next_lx = [p.lx for p in raw_pts]
+            next_ly = [p.ly for p in raw_pts]
+            next_rx = [p.rx for p in raw_pts]
+            next_ry = [p.ry for p in raw_pts]
+            for i in range(1, smooth_limit):
+                next_lx[i] = 0.25 * raw_pts[i - 1].lx + 0.50 * raw_pts[i].lx + 0.25 * raw_pts[i + 1].lx
+                next_ly[i] = 0.25 * raw_pts[i - 1].ly + 0.50 * raw_pts[i].ly + 0.25 * raw_pts[i + 1].ly
+                next_rx[i] = 0.25 * raw_pts[i - 1].rx + 0.50 * raw_pts[i].rx + 0.25 * raw_pts[i + 1].rx
+                next_ry[i] = 0.25 * raw_pts[i - 1].ry + 0.50 * raw_pts[i].ry + 0.25 * raw_pts[i + 1].ry
+            for i in range(1, smooth_limit):
+                raw_pts[i].lx = next_lx[i]
+                raw_pts[i].ly = next_ly[i]
+                raw_pts[i].rx = next_rx[i]
+                raw_pts[i].ry = next_ry[i]
+
+        # 折れ肩ベベル（外側コーナー肩のCalligraphic bevel）
+        for cf in corner_features:
+            if cf["turnSign"] >= 0:
+                w = shaft_radius * ton_mult
+                for p in raw_pts:
+                    d = p.s - cf["s"]
+                    if -7.0 <= d <= 10.0:
+                        t1 = (d - (-1.8)) / 4.2
+                        b1 = 0.5 * (1.0 + math.cos(t1 * math.pi)) if abs(t1) <= 1.0 else 0.0
+
+                        t2 = (d - 1.0) / 5.0
+                        b2 = 0.5 * (1.0 + math.cos(t2 * math.pi)) if abs(t2) <= 1.0 else 0.0
+
+                        p.rx += (+0.06 * w) * b1 + (+0.26 * w) * b2
+                        p.ry += (-0.16 * w) * b1 + (+0.04 * w) * b2
+
+        # コーナー周辺の局所平滑化
+        for cf in corner_features:
+            for _ in range(2):
+                temp_rx = [None] * (num_samples + 1)
+                temp_ry = [None] * (num_samples + 1)
+                temp_lx = [None] * (num_samples + 1)
+                temp_ly = [None] * (num_samples + 1)
+                for i in range(1, smooth_limit):
+                    d = raw_pts[i].s - cf["s"]
+                    if -8.0 <= d <= 12.0:
+                        temp_rx[i] = 0.25 * raw_pts[i - 1].rx + 0.50 * raw_pts[i].rx + 0.25 * raw_pts[i + 1].rx
+                        temp_ry[i] = 0.25 * raw_pts[i - 1].ry + 0.50 * raw_pts[i].ry + 0.25 * raw_pts[i + 1].ry
+                        temp_lx[i] = 0.25 * raw_pts[i - 1].lx + 0.50 * raw_pts[i].lx + 0.25 * raw_pts[i + 1].lx
+                        temp_ly[i] = 0.25 * raw_pts[i - 1].ly + 0.50 * raw_pts[i].ly + 0.25 * raw_pts[i + 1].ly
+                for i in range(1, smooth_limit):
+                    d = raw_pts[i].s - cf["s"]
+                    if -8.0 <= d <= 12.0 and temp_rx[i] is not None:
+                        raw_pts[i].rx = temp_rx[i]
+                        raw_pts[i].ry = temp_ry[i]
+                        raw_pts[i].lx = temp_lx[i]
+                        raw_pts[i].ly = temp_ly[i]
+
+        # 境界マイクロジッター（手漉き和紙の繊維吸収ゆらぎ）
+        stroke_seed = (stroke_index or 1) * 67 + 11
+        for i in range(1, smooth_limit + 1):
+            p = raw_pts[i]
+            h1 = math.sin(i * 12.9898 + stroke_seed) * 43758.5453
+            jit_l = (h1 - math.floor(h1) - 0.5) * 0.70
+            h2 = math.sin(i * 27.6543 + stroke_seed) * 43758.5453
+            jit_r = (h2 - math.floor(h2) - 0.5) * 0.70
+
+            p.lx += p.nx * jit_l
+            p.ly += p.ny * jit_l
+            p.rx += p.nx * jit_r
+            p.ry += p.ny * jit_r
+
+        hf = hook_feature
+        heel_idx = hf["heelIdx"] if hf else -1
+        limit = len(raw_pts) - 1
+
+        if hf and limit > heel_idx:
+            part_a = _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, heel_idx, is_hook_truncated=True)
+            part_b = _draw_fleshy_hook_wedge_svg(raw_pts, shaft_radius, ton_mult, hf, limit, heel_idx)
+            return f"{part_a} {part_b}".strip()
+        else:
+            return _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, limit, is_hook_truncated=False)
+    except Exception:
+        return stroke_d
+
+
 class KanjiVGService:
     """
     KanjiVG XMLデータのオンデマンド解析およびCHISE IDS木とのスマート整合を行うサービスクラス。
@@ -1437,6 +2315,14 @@ class KanjiVGService:
         if root_g is None:
             return None
 
+        all_paths = [e for e in root_g.iter() if e.tag.endswith("path")]
+        total_strokes = max(1, len(all_paths))
+        path_idx_map: dict[int, int] = {}
+        for i, pe in enumerate(all_paths, 1):
+            pid = pe.attrib.get("id", "")
+            m = re.search(r"-s(\d+)", pid)
+            path_idx_map[id(pe)] = int(m.group(1)) if m else i
+
         def parse_group(g: ET.Element) -> dict[str, Any]:
             gid = g.attrib.get("id", "")
             raw_elem = g.attrib.get(f"{{{KVG_NS}}}element") or g.attrib.get("kvg:element")
@@ -1468,7 +2354,16 @@ class KanjiVGService:
                         or child.attrib.get("kvg:type")
                         or ""
                     )
-                    node["strokes"].append({"id": pid, "d": d, "type": ptype})
+                    idx = path_idx_map.get(id(child), 1)
+                    calligraphy_d = compile_slender_calligraphy_stroke_d(
+                        d, ptype, idx, total_strokes
+                    )
+                    node["strokes"].append({
+                        "id": pid,
+                        "d": d,
+                        "type": ptype,
+                        "calligraphy_d": calligraphy_d,
+                    })
                 elif tag == "g":
                     node["children"].append(parse_group(child))
 
@@ -1660,29 +2555,43 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
     except ET.ParseError:
         return {"has_kvg": False, "all_strokes": [], "layer_strokes": {}, "kvg_tree": None}
 
+    raw_paths = [p for p in root.iter() if p.tag.endswith("path") and p.attrib.get("id") and p.attrib.get("d")]
+    total_strokes = max(1, len(raw_paths))
+
     strokes_map: dict[str, dict[str, Any]] = {}
     all_strokes: list[dict[str, Any]] = []
-    for p in root.iter():
-        if p.tag.endswith("path"):
-            sid = p.attrib.get("id", "")
-            sd = p.attrib.get("d", "")
-            if sid and sd:
-                pts = _parse_svg_path_points(sd)
-                if pts:
-                    xs = [pt[0] / 109.0 for pt in pts]
-                    ys = [pt[1] / 109.0 for pt in pts]
-                    bx, by, bw, bh = min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
-                    cx, cy = bx + bw / 2.0, by + bh / 2.0
-                else:
-                    bx, by, bw, bh, cx, cy = 0.0, 0.0, 0.0, 0.0, 0.5, 0.5
-                s_obj = {
-                    "id": sid,
-                    "d": sd,
-                    "bbox": [round(bx, 4), round(by, 4), round(bw, 4), round(bh, 4)],
-                    "center": (round(cx, 4), round(cy, 4)),
-                }
-                strokes_map[sid] = s_obj
-                all_strokes.append(s_obj)
+    for i, p in enumerate(raw_paths, 1):
+        sid = p.attrib.get("id", "")
+        sd = p.attrib.get("d", "")
+        ptype = (
+            p.attrib.get(f"{{{KVG_NS}}}type")
+            or p.attrib.get("kvg:type")
+            or ""
+        )
+        m = re.search(r"-s(\d+)", sid)
+        idx = int(m.group(1)) if m else i
+        calligraphy_d = compile_slender_calligraphy_stroke_d(
+            sd, ptype, idx, total_strokes
+        )
+
+        pts = _parse_svg_path_points(sd)
+        if pts:
+            xs = [pt[0] / 109.0 for pt in pts]
+            ys = [pt[1] / 109.0 for pt in pts]
+            bx, by, bw, bh = min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+            cx, cy = bx + bw / 2.0, by + bh / 2.0
+        else:
+            bx, by, bw, bh, cx, cy = 0.0, 0.0, 0.0, 0.0, 0.5, 0.5
+        s_obj = {
+            "id": sid,
+            "d": sd,
+            "type": ptype,
+            "calligraphy_d": calligraphy_d,
+            "bbox": [round(bx, 4), round(by, 4), round(bw, 4), round(bh, 4)],
+            "center": (round(cx, 4), round(cy, 4)),
+        }
+        strokes_map[sid] = s_obj
+        all_strokes.append(s_obj)
 
     def parse_group(g: ET.Element, parent: dict[str, Any] | None = None) -> dict[str, Any]:
         elem = g.attrib.get(f"{{{KVG_NS}}}element") or g.attrib.get("kvg:element") or ""
@@ -1700,7 +2609,12 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
             "direct": direct,
             "children": [],
             "strokes": [
-                {"id": sid, "d": strokes_map[sid]["d"]}
+                {
+                    "id": sid,
+                    "d": strokes_map[sid]["d"],
+                    "type": strokes_map[sid]["type"],
+                    "calligraphy_d": strokes_map[sid]["calligraphy_d"],
+                }
                 for sid in direct
                 if sid in strokes_map
             ],

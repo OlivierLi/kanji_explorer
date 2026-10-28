@@ -84,8 +84,8 @@ def render_side_by_side_html(
     # 全体カード (Tile 0)
     if use_kvg and all_kvg_strokes:
         tile0_svg = f'''<svg viewBox="0 0 109 109" class="kvg-svg">
-          <g class="kvg-root" style="stroke: var(--text-primary); fill: none; stroke-width: 3.4px; stroke-linecap: square; stroke-linejoin: miter; stroke-miterlimit: 4;">
-            {"".join(f'<path d="{s["d"]}" class="kvg-stroke" style="opacity: 0.95;" />' for s in all_kvg_strokes)}
+          <g class="kvg-root">
+            {"".join(f'<path d="{s.get("calligraphy_d") or s["d"]}" class="kvg-stroke calligraphic-stroke" style="opacity: 0.95;" />' for s in all_kvg_strokes)}
           </g>
         </svg>'''
     elif base_path:
@@ -122,19 +122,19 @@ def render_side_by_side_html(
         if use_kvg and active_stroke_ids:
             active_set = set(active_stroke_ids)
             bg_paths = "".join(
-                f'<path d="{s["d"]}" class="kvg-stroke" />'
+                f'<path d="{s.get("calligraphy_d") or s["d"]}" class="kvg-stroke calligraphic-stroke" />'
                 for s in all_kvg_strokes if s["id"] not in active_set
             )
             fg_paths = "".join(
-                f'<path d="{s["d"]}" class="kvg-stroke active-stroke" />'
+                f'<path d="{s.get("calligraphy_d") or s["d"]}" class="kvg-stroke calligraphic-stroke active-stroke" />'
                 for s in all_kvg_strokes if s["id"] in active_set
             )
             tile_svg = f'''<svg viewBox="0 0 109 109" class="kvg-svg">
               <g class="kvg-root">
-                <g class="kvg-bg-strokes" style="opacity: 0.18; stroke: var(--text-primary); fill: none; stroke-width: 3.2px; stroke-linecap: square; stroke-linejoin: miter; stroke-miterlimit: 4;">
+                <g class="kvg-bg-strokes" style="opacity: 0.18;">
                   {bg_paths}
                 </g>
-                <g class="kvg-active-strokes" style="opacity: 1.0; stroke: #ff5a36; fill: none; stroke-width: 4.2px; stroke-linecap: square; stroke-linejoin: miter; stroke-miterlimit: 4;">
+                <g class="kvg-active-strokes" style="opacity: 1.0;">
                   {fg_paths}
                 </g>
               </g>
@@ -397,13 +397,29 @@ def render_side_by_side_html(
       border: none;
       border-radius: 0;
     }}
-    .kvg-active-strokes .kvg-stroke,
-    .kvg-stroke.active-stroke {{
+    .calligraphic-stroke {{
+      fill: var(--text-primary);
+      stroke: none;
+    }}
+    .active-stroke.calligraphic-stroke {{
+      fill: var(--accent-vermilion) !important;
+      stroke: none !important;
+    }}
+    .kvg-bg-strokes .calligraphic-stroke {{
+      fill: var(--text-primary) !important;
+      stroke: none !important;
+    }}
+    .kvg-active-strokes .calligraphic-stroke {{
+      fill: var(--accent-vermilion) !important;
+      stroke: none !important;
+    }}
+    .kvg-active-strokes .kvg-stroke:not(.calligraphic-stroke),
+    .kvg-stroke.active-stroke:not(.calligraphic-stroke) {{
       stroke: var(--accent-vermilion) !important;
       opacity: 1 !important;
       stroke-width: 4.2px !important;
     }}
-    .kvg-bg-strokes .kvg-stroke {{
+    .kvg-bg-strokes .kvg-stroke:not(.calligraphic-stroke) {{
       opacity: 0.18 !important;
       stroke: var(--text-primary) !important;
       stroke-width: 3.2px !important;
