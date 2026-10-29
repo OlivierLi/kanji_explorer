@@ -83,7 +83,7 @@ def render_side_by_side_html(
 
     # 全体カード (Tile 0)
     if use_kvg and all_kvg_strokes:
-        tile0_svg = f'''<svg viewBox="0 0 109 109" class="kvg-svg">
+        tile0_svg = f'''<canvas class="calligraphy-sumi-canvas audit-sumi-canvas" width="792" height="792" data-tile-mode="all"></canvas><svg viewBox="0 0 109 109" class="kvg-svg has-sumi-canvas">
           <g class="kvg-root">
             {"".join(f'<path d="{s.get("calligraphy_d") or s["d"]}" class="kvg-stroke calligraphic-stroke" style="opacity: 0.95;" />' for s in all_kvg_strokes)}
           </g>
@@ -129,7 +129,7 @@ def render_side_by_side_html(
                 f'<path d="{s.get("calligraphy_d") or s["d"]}" class="kvg-stroke calligraphic-stroke active-stroke" />'
                 for s in all_kvg_strokes if s["id"] in active_set
             )
-            tile_svg = f'''<svg viewBox="0 0 109 109" class="kvg-svg">
+            tile_svg = f'''<canvas class="calligraphy-sumi-canvas audit-sumi-canvas" width="792" height="792" data-tile-mode="highlight" data-active-ids="{html.escape(",".join(active_stroke_ids))}"></canvas><svg viewBox="0 0 109 109" class="kvg-svg has-sumi-canvas">
               <g class="kvg-root">
                 <g class="kvg-bg-strokes" style="opacity: 0.18;">
                   {bg_paths}
@@ -195,6 +195,19 @@ def render_side_by_side_html(
     theme_query = f"&theme={theme}" if "theme" in params else ""
     prev_link = f'<a href="/view?char={urllib.parse.quote(prev_char)}&mode={mode}{theme_query}" class="audit-btn nav-btn" title="前の漢字 (← キー)">◀ {html.escape(prev_char)}</a>' if prev_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">◀ 前</span>'
     next_link = f'<a href="/view?char={urllib.parse.quote(next_char)}&mode={mode}{theme_query}" class="audit-btn nav-btn" title="次の漢字 (→ キー)">{html.escape(next_char)} ▶</a>' if next_char else '<span class="audit-btn nav-btn" style="opacity:0.4;">次 ▶</span>'
+
+    audit_strokes_json = json.dumps(
+        [
+            {
+                "id": s["id"],
+                "d": s["d"],
+                "type": s.get("type", ""),
+                "component": s.get("component", ""),
+            }
+            for s in all_kvg_strokes
+        ],
+        ensure_ascii=False,
+    )
 
     full_html = f'''<!DOCTYPE html>
 <html lang="ja" data-theme="{theme}">
@@ -356,6 +369,7 @@ def render_side_by_side_html(
       justify-content: center;
     }}
     .audit-card-stage .canvas-svg-container {{
+      position: relative;
       width: 100%;
       height: 100%;
       display: flex;
@@ -363,6 +377,8 @@ def render_side_by_side_html(
       justify-content: center;
     }}
     .audit-card-stage .kvg-svg {{
+      position: relative;
+      z-index: 2;
       width: 100%;
       height: 100%;
       max-width: 100%;
@@ -482,6 +498,10 @@ def render_side_by_side_html(
   </main>
 
   <script>
+    window.AUDIT_KVG_STROKES = {audit_strokes_json};
+  </script>
+  <script src="/static/app.js"></script>
+  <script>
     const prevUrl = {json.dumps(f"/view?char={urllib.parse.quote(prev_char)}&mode={mode}{theme_query}" if prev_char else "")};
     const nextUrl = {json.dumps(f"/view?char={urllib.parse.quote(next_char)}&mode={mode}{theme_query}" if next_char else "")};
 
@@ -490,6 +510,7 @@ def render_side_by_side_html(
       const nxt = cur === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', nxt);
       localStorage.setItem('kanji_theme', nxt);
+      if (window.renderAllAuditCanvases) window.renderAllAuditCanvases();
     }}
     const urlParams = new URLSearchParams(window.location.search);
     const paramTheme = urlParams.get('theme');

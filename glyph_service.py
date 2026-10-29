@@ -1221,23 +1221,60 @@ class _CalligraphyRawPt:
         self.ry = 0.0
 
 
-def _classify_calligraphy_stroke_behavior(stroke_type: str = "", stroke_name: str = "") -> dict[str, bool]:
-    """筆画タイプおよび名称から運筆挙動（鉤、撥ね、止め、払い等）を分類します。"""
-    t = (stroke_type or "").strip()
+def _classify_calligraphy_stroke_behavior(
+    stroke_type: str = "",
+    stroke_name: str = "",
+    component: str = "",
+) -> dict[str, bool]:
+    """筆画タイプ、名称および所属部品から運筆挙動（鉤、撥ね、止め、払い等）を分類します。"""
+    raw_t = stroke_type or ""
+    primary = raw_t.split("/")[0].strip()
+    t = primary
     name = (stroke_name or "").lower()
+    comp = (component or "").strip()
 
-    is_hook = (
-        "㇚" in t or "㇈" in t or "㇂" in t or "㇆" in t or "㇖" in t or "㇟" in t or "㇡" in t
-        or "gōu" in name or "鉤" in name or "钩" in name
+    # 子, 了, 孑 の第1画（横撇）は KanjiVG で ㇖ と表記されていても横撇として扱う
+    is_zi_heng_pie = (comp in ("子", "了", "孑")) and (
+        "㇖" in t or "㇇" in t or "横撇" in name or "piě" in name
     )
+    is_curved_bow_hook = "㇁" in t or "wān gōu" in name or "彎鉤" in name
+    is_roof_hook = ("㇖" in t or "横鉤" in name or "héng gōu" in name) and (not is_zi_heng_pie)
+
+    # 終端の跳ね（鉤）。わかんむり・うかんむり等の横鉤(㇖)は連続折れテーパー筆画として描画するため除外
+    is_hook = (not is_zi_heng_pie) and (not is_roof_hook) and (
+        "㇚" in t or "㇈" in t or "㇂" in t or "㇆" in t
+        or "㇃" in t or "㇉" in t or "㇌" in t or "㇟" in t
+        or "㇠" in t or "㇡" in t or "㇢" in t
+        or is_curved_bow_hook or "gōu" in name or "鉤" in name or "钩" in name
+    )
+
     is_rising_ti = "㇀" in t or "tí" in name or "提" in name
+    is_vertical_ti = "㇙" in t or "㇊" in t
+    is_vertical_sweep = "㇓" in t
     is_right_na = ("㇏" in t or "nà" in name or "捺" in name) and ("㇔" not in t)
-    is_dot = ("㇔" in t or "diǎn" in name or "点" in name) and (not is_right_na) and (not is_rising_ti)
-    is_sweep_end = (not is_hook) and (not is_dot) and (not is_right_na) and (
-        "㇒" in t or "㇇" in t or is_rising_ti or "piě" in name or "撇" in name
+    is_crown_dot = t == "㇑a" and comp in ("宀", "亠", "广", "疒", "穴")
+    is_dot = ("㇔" in t or is_crown_dot or "diǎn" in name or "点" in name) and (not is_right_na) and (not is_rising_ti)
+
+    is_sweep_end = (
+        (not is_hook)
+        and (not is_dot)
+        and (not is_right_na)
+        and (not is_rising_ti)
+        and (not is_vertical_ti)
+        and (
+            "㇒" in t or "㇇" in t or "㇋" in t
+            or is_vertical_sweep or is_zi_heng_pie or is_roof_hook
+            or "piě" in name or "撇" in name
+        )
     )
+
     is_fold = (
-        "㇕" in t or "㇄" in t or "㇈" in t or "㇆" in t or "㇇" in t or "㇖" in t
+        "㇕" in t or "㇄" in t or "㇅" in t or "㇆" in t
+        or "㇈" in t or "㇉" in t or "㇊" in t or "㇋" in t
+        or "㇌" in t or "㇍" in t or "㇎" in t or "㇇" in t
+        or "㇖" in t or "㇗" in t or "㇘" in t or "㇙" in t
+        or "㇛" in t or "㇜" in t or "㇞" in t or "㇟" in t
+        or "㇠" in t or "㇡" in t or is_zi_heng_pie or is_roof_hook
         or "zhé" in name or "折" in name
     )
     is_horizontal = "㇐" in t or "héng" in name or "横" in name
@@ -1245,8 +1282,13 @@ def _classify_calligraphy_stroke_behavior(stroke_type: str = "", stroke_name: st
     is_connecting_vertical = "㇑a" in t
 
     return {
+        "isZiHengPie": is_zi_heng_pie,
+        "isCurvedBowHook": is_curved_bow_hook,
+        "isRoofHook": is_roof_hook,
         "isSweepEnd": is_sweep_end,
         "isRisingTi": is_rising_ti,
+        "isVerticalTi": is_vertical_ti,
+        "isVerticalSweep": is_vertical_sweep,
         "isRightNa": is_right_na,
         "isDot": is_dot,
         "isHook": is_hook,
@@ -1304,7 +1346,7 @@ def _sample_quad_points(x0: float, y0: float, x1: float, y1: float, x2: float, y
         t = step / steps
         it = 1.0 - t
         x = it * it * x0 + 2 * it * t * x1 + t * t * x2
-        y = it * it * y0 + 2 * it * t * y1 + t * t * x2
+        y = it * it * y0 + 2 * it * t * y1 + t * t * y2
         out.append((x, y))
 
 
@@ -1472,12 +1514,19 @@ def _trace_smooth_stroke_contour_svg(
     hook_feature: dict[str, Any] | None,
     limit_idx: int,
     is_hook_truncated: bool = False,
+    box_size: float = 109.0,
 ) -> str:
     """左右境界サンプル点列からChaikinスムージングを行い閉じたSVG輪郭パスを生成します。"""
     if not pts or limit_idx < 1:
         return ""
 
-    is_sharp_tip = behavior["isSweepEnd"] or behavior["isRightNa"]
+    is_sharp_tip = (
+        (behavior["isSweepEnd"] and not behavior.get("isZiHengPie", False))
+        or behavior.get("isRoofHook", False)
+        or behavior.get("isRisingTi", False)
+        or behavior.get("isVerticalTi", False)
+        or behavior["isRightNa"]
+    )
     is_up_hook = hook_feature["isUpwardHook"] if hook_feature else False
     left_limit = max(2, limit_idx - 5) if (is_hook_truncated and not is_up_hook) else limit_idx
     right_limit = max(2, limit_idx - 5) if (is_hook_truncated and is_up_hook) else limit_idx
@@ -1499,8 +1548,9 @@ def _trace_smooth_stroke_contour_svg(
     if is_hook_truncated:
         parts.append(f"L {last_r[0]:.2f} {last_r[1]:.2f}")
     elif is_sharp_tip and limit_idx >= len(pts) - 2:
-        tip_x = (last_l[0] + last_r[0]) * 0.5 + end_pt.tx * 3.5
-        tip_y = (last_l[1] + last_r[1]) * 0.5 + end_pt.ty * 3.5
+        tip_ext = 3.5 * (box_size / 792.0)
+        tip_x = (last_l[0] + last_r[0]) * 0.5 + end_pt.tx * tip_ext
+        tip_y = (last_l[1] + last_r[1]) * 0.5 + end_pt.ty * tip_ext
         parts.append(f"L {tip_x:.2f} {tip_y:.2f}")
         parts.append(f"L {last_r[0]:.2f} {last_r[1]:.2f}")
     elif behavior["isDot"]:
@@ -1553,7 +1603,28 @@ def _draw_fleshy_hook_wedge_svg(
 
     parts: list[str] = []
 
-    if hook_feature["isUpwardHook"]:
+    if hook_feature.get("isDownLeftHook", False):
+        join_l_idx = max(4, heel_idx - 8)
+        join_r_idx = max(4, heel_idx - 7)
+        outer_join = pts[join_l_idx]
+        inner_join = pts[join_r_idx]
+
+        end_pt = pts[-1]
+        tip_x = end_pt.x - r * 0.35
+        tip_y = end_pt.y + r * 0.25
+
+        parts.append(f"M {outer_join.lx:.2f} {outer_join.ly:.2f}")
+        for k in range(join_l_idx + 1, min(len(pts) - 1, heel_idx - 2) + 1):
+            parts.append(f"L {pts[k].lx:.2f} {pts[k].ly:.2f}")
+
+        parts.append(f"Q {H.x + r * 0.95:.2f} {H.y - r * 0.95:.2f} {H.x + r * 1.25:.2f} {H.y + r * 0.15:.2f}")
+        parts.append(f"Q {H.x + r * 0.65:.2f} {H.y + r * 1.35:.2f} {tip_x:.2f} {tip_y:.2f}")
+        parts.append(f"Q {H.x - r * 0.45:.2f} {H.y + r * 0.95:.2f} {inner_join.rx:.2f} {inner_join.ry:.2f}")
+        for k in range(join_r_idx - 1, join_l_idx - 1, -1):
+            parts.append(f"L {pts[k].rx:.2f} {pts[k].ry:.2f}")
+        parts.append(f"L {outer_join.lx:.2f} {outer_join.ly:.2f}")
+        parts.append("Z")
+    elif hook_feature["isUpwardHook"]:
         outer_idx = max(2, heel_idx - 6)
         inner_idx = max(2, heel_idx - 6)
 
@@ -1585,37 +1656,38 @@ def _draw_fleshy_hook_wedge_svg(
         uy = -0.36
         hook_len = r * 3.15
 
-        if hook_feature["isDownLeftHook"]:
-            ux = -0.68
-            uy = 0.73
-            hook_len = r * 2.5
-
         flick_progress = (limit_idx - heel_idx) / max(1, len(pts) - 1 - heel_idx)
         cur_len = max(r * 1.6, hook_len * min(1.0, flick_progress * 1.15))
 
         tip_x = H.x + ux * cur_len
         tip_y = H.y + uy * cur_len
-
-        outer_idx = max(2, heel_idx - 6)
-        inner_idx = max(2, heel_idx - 5)
-
         heel_bottom_x = H.x + stx * r * 1.15
         heel_bottom_y = H.y + sty * r * 1.15
+
+        is_curved_bow = hook_feature.get("isCurvedBowHook", False)
+        if is_curved_bow:
+            heel_bottom_x = H.x + stx * r * 0.85
+            heel_bottom_y = H.y + r * 0.90
+            tip_x = H.x - r * 2.8
+            tip_y = H.y - r * 0.70
+
+        outer_idx = max(2, heel_idx - (4 if is_curved_bow else 6))
+        inner_idx = max(2, heel_idx - (4 if is_curved_bow else 5))
 
         parts.append(f"M {pts[outer_idx].rx:.2f} {pts[outer_idx].ry:.2f}")
         for k in range(outer_idx + 1, heel_idx + 1):
             parts.append(f"L {pts[k].rx:.2f} {pts[k].ry:.2f}")
 
-        c1x = pts[heel_idx].rx + stx * r * 0.9
-        c1y = pts[heel_idx].ry + sty * r * 0.9
+        c1x = pts[heel_idx].rx + stx * r * 0.8
+        c1y = pts[heel_idx].ry + sty * r * 0.8
         parts.append(f"Q {c1x:.2f} {c1y:.2f} {heel_bottom_x:.2f} {heel_bottom_y:.2f}")
 
-        c2x = H.x + ux * cur_len * 0.42 + stx * r * 0.65
-        c2y = H.y + uy * cur_len * 0.42 + sty * r * 0.65
+        c2x = (heel_bottom_x + tip_x) * 0.5 + stx * r * 0.25
+        c2y = (heel_bottom_y + tip_y) * 0.5 + sty * r * 0.25
         parts.append(f"Q {c2x:.2f} {c2y:.2f} {tip_x:.2f} {tip_y:.2f}")
 
-        c3x = pts[inner_idx].lx - r * 0.45
-        c3y = (tip_y + pts[inner_idx].ly) * 0.5 + r * 0.20
+        c3x = pts[inner_idx].lx - (r * 0.20 if is_curved_bow else r * 0.45)
+        c3y = (tip_y + pts[inner_idx].ly) * 0.5 + (0.0 if is_curved_bow else r * 0.20)
         parts.append(f"Q {c3x:.2f} {c3y:.2f} {pts[inner_idx].lx:.2f} {pts[inner_idx].ly:.2f}")
 
         parts.append("Z")
@@ -1629,6 +1701,7 @@ def compile_slender_calligraphy_stroke_d(
     stroke_type: str = "",
     stroke_index: int = 1,
     total_strokes: int = 10,
+    component: str = "",
 ) -> str:
     """KanjiVG筆画パス(d)を痩金体(slender)書法物理エンジンに基づき閉じた書道輪郭SVGパスにコンパイルします。"""
     if not stroke_d or not stroke_d.strip():
@@ -1674,7 +1747,24 @@ def compile_slender_calligraphy_stroke_d(
             px, py = get_point_at_length(s)
             raw_pts.append(_CalligraphyRawPt(s, i / num_samples, px, py))
 
-        behavior = _classify_calligraphy_stroke_behavior(stroke_type, "")
+        behavior = _classify_calligraphy_stroke_behavior(stroke_type, "", component)
+
+        # 子・了・孑の上部横撇（第1画）の終端延長：次画（彎鉤）の起筆頭部へ確実に重なるよう2.2単位延長
+        if behavior["isZiHengPie"] and len(raw_pts) > 8:
+            last_pt = raw_pts[num_samples]
+            prev_pt = raw_pts[max(0, num_samples - 3)]
+            edx = last_pt.svgX - prev_pt.svgX
+            edy = last_pt.svgY - prev_pt.svgY
+            emag = math.hypot(edx, edy) or 1.0
+            etx = edx / emag
+            ety = edy / emag
+            ext_dist = 2.2
+            blend_start = math.floor(num_samples * 0.85)
+            denom = max(1, num_samples - blend_start)
+            for i in range(blend_start, num_samples + 1):
+                t = (i - blend_start) / denom
+                raw_pts[i].svgX += etx * ext_dist * t
+                raw_pts[i].svgY += ety * ext_dist * t
 
         # 起筆方向アライメント（点以外の不要な突き出し・ベクトルトゲを除去）
         if not behavior["isDot"] and len(raw_pts) > 8 and orig_len > 8:
@@ -1717,7 +1807,7 @@ def compile_slender_calligraphy_stroke_d(
         # 鉤（ハネ）頂点検出とフリック方向判定
         hook_feature = None
         if behavior["isHook"] and orig_len > 13:
-            search_start = math.floor(num_samples * 0.65)
+            search_start = max(math.floor(num_samples * 0.70), num_samples - math.ceil(15.0 / step))
             best_idx = -1
             max_turn = 0.28
             for i in range(search_start, num_samples - 1):
@@ -1732,47 +1822,52 @@ def compile_slender_calligraphy_stroke_d(
                     max_y_idx = i
             if max_y_idx > search_start and max_y - raw_pts[num_samples].svgY > 0.8:
                 best_idx = max_y_idx
-            if best_idx == -1:
-                best_idx = math.floor(num_samples * 0.84)
 
-            apex_pt = raw_pts[best_idx]
-            end_pt = raw_pts[num_samples]
-            fdx = end_pt.svgX - apex_pt.svgX
-            fdy = end_pt.svgY - apex_pt.svgY
+            # 検出された頂点が真正の終端ハネであるか検証（残余長 <= 12.0 かつ <= 25% かつ u >= 0.72）
+            if best_idx != -1:
+                rem_len = orig_len - raw_pts[best_idx].s
+                rem_ratio = rem_len / orig_len
+                if rem_len > 12.0 or rem_ratio > 0.25 or raw_pts[best_idx].u < 0.72:
+                    best_idx = -1
 
-            is_down_left_hook = (fdx < -0.2 and fdy > 0.2)
-            is_vertical_left_hook = (not is_down_left_hook and fdx < -0.2)
-            is_upward_hook = (not is_down_left_hook and not is_vertical_left_hook)
+            if best_idx != -1:
+                if behavior["isCurvedBowHook"] and max_y_idx > search_start:
+                    best_idx = max_y_idx
+                apex_pt = raw_pts[best_idx]
+                end_pt = raw_pts[num_samples]
+                fdx = end_pt.svgX - apex_pt.svgX
 
-            if is_vertical_left_hook:
-                hook_ux = -0.92
-                hook_uy = -0.39
-            elif is_upward_hook:
-                hook_uy = -0.988
-                hook_ux = 0.15
-            else:
-                hook_ux = -0.68
-                hook_uy = 0.73
+                is_down_left_hook = False
+                is_vertical_left_hook = fdx < -0.2
+                is_upward_hook = not is_vertical_left_hook
 
-            heel_idx = max(4, best_idx - 4)
-            hook_feature = {
-                "index": best_idx,
-                "heelIdx": heel_idx,
-                "u": raw_pts[best_idx].u,
-                "s": raw_pts[best_idx].s,
-                "angle": max(1.3, raw_pts[best_idx].turnAngle),
-                "isUpwardHook": is_upward_hook,
-                "isVerticalLeftHook": is_vertical_left_hook,
-                "isDownLeftHook": is_down_left_hook,
-                "flickUx": hook_ux,
-                "flickUy": hook_uy,
-            }
+                if is_vertical_left_hook:
+                    hook_ux = -0.92
+                    hook_uy = -0.39
+                else:
+                    hook_uy = -0.988
+                    hook_ux = 0.15
+
+                heel_idx = max(4, best_idx - 2) if behavior["isCurvedBowHook"] else max(4, best_idx - 4)
+                hook_feature = {
+                    "index": best_idx,
+                    "heelIdx": heel_idx,
+                    "u": raw_pts[best_idx].u,
+                    "s": raw_pts[best_idx].s,
+                    "angle": max(1.3, raw_pts[best_idx].turnAngle),
+                    "isUpwardHook": is_upward_hook,
+                    "isVerticalLeftHook": is_vertical_left_hook,
+                    "isDownLeftHook": is_down_left_hook,
+                    "isCurvedBowHook": behavior["isCurvedBowHook"],
+                    "flickUx": hook_ux,
+                    "flickUy": hook_uy,
+                }
 
         # 折れ曲がり（コーナー）検出（鉤領域を除く）
         corner_features = []
         min_corner_s = 5.0
         max_corner_s = (hook_feature["s"] - 6.5) if hook_feature else (orig_len - 4.5)
-        min_sep = max(6, round(7.0 / step))
+        min_sep = max(4, round(3.2 / step))
 
         for i in range(win + 2, num_samples - win - 1):
             s = raw_pts[i].s
@@ -1945,13 +2040,35 @@ def compile_slender_calligraphy_stroke_d(
                             else:
                                 w_r += (0.24 * ton_mult) * heel_bell
                                 w_l = min(w_l, shaft_tension * (1.0 - 0.20 * heel_bell))
-                elif behavior["isSweepEnd"]:
-                    sweep_start = 0.38 if is_right_to_left_sweep else 0.44
-                    if u > sweep_start:
-                        t_sweep = (u - sweep_start) / (1.0 - sweep_start)
-                        taper = max(0.02, 1.0 - t_sweep * 0.98) ** 0.78
+                elif behavior["isRoofHook"]:
+                    corner_u = corner_features[0]["u"] if corner_features else 0.78
+                    if u > corner_u:
+                        t_hook = (u - corner_u) / max(1e-6, 1.0 - corner_u)
+                        taper = max(0.02, 1.0 - t_hook * 0.98) ** 0.75
                         w_l *= taper
                         w_r *= taper
+                elif behavior["isVerticalTi"]:
+                    corner_u = corner_features[-1]["u"] if corner_features else 0.75
+                    if u > corner_u:
+                        t_ti = (u - corner_u) / max(1e-6, 1.0 - corner_u)
+                        taper = max(0.03, 1.0 - t_ti * 0.97) ** 0.70
+                        w_l *= taper
+                        w_r *= taper
+                elif behavior["isSweepEnd"]:
+                    if behavior["isZiHengPie"]:
+                        corner_u = corner_features[0]["u"] if corner_features else 0.60
+                        if u > corner_u:
+                            t_sweep = (u - corner_u) / max(1e-6, 1.0 - corner_u)
+                            taper = 1.0 - t_sweep * 0.60
+                            w_l *= taper
+                            w_r *= taper
+                    else:
+                        sweep_start = 0.38 if is_right_to_left_sweep else 0.44
+                        if u > sweep_start:
+                            t_sweep = (u - sweep_start) / (1.0 - sweep_start)
+                            taper = max(0.02, 1.0 - t_sweep * 0.98) ** 0.78
+                            w_l *= taper
+                            w_r *= taper
                 elif behavior["isVertical"] and not behavior["isFold"]:
                     end_dist = total_len - s
                     tome_zone = min(5.5, total_len * 0.28)
@@ -2000,9 +2117,12 @@ def compile_slender_calligraphy_stroke_d(
                 raw_pts[i].rx = next_rx[i]
                 raw_pts[i].ry = next_ry[i]
 
-        # 折れ肩ベベル（外側コーナー肩のCalligraphic bevel）
+        # 折れ肩ベベル（右上コーナーのみ：横折・横撇・横鉤）
         for cf in corner_features:
-            if cf["turnSign"] >= 0:
+            prev_tx = raw_pts[max(0, cf["index"] - 8)].tx
+            next_ty = raw_pts[min(num_samples, cf["index"] + 8)].ty
+            is_top_right_corner = cf["turnSign"] >= 0 and prev_tx > 0.40 and next_ty > 0.25
+            if is_top_right_corner:
                 w = shaft_radius * ton_mult
                 for p in raw_pts:
                     d = p.s - cf["s"]
@@ -2038,14 +2158,15 @@ def compile_slender_calligraphy_stroke_d(
                         raw_pts[i].lx = temp_lx[i]
                         raw_pts[i].ly = temp_ly[i]
 
-        # 境界マイクロジッター（手漉き和紙の繊維吸収ゆらぎ）
+        # 境界マイクロジッター（手漉き和紙の繊維吸収ゆらぎ：box_size=109 に比例スケーリング）
+        jit_scale = 0.70 * (box_size / 792.0)
         stroke_seed = (stroke_index or 1) * 67 + 11
         for i in range(1, smooth_limit + 1):
             p = raw_pts[i]
             h1 = math.sin(i * 12.9898 + stroke_seed) * 43758.5453
-            jit_l = (h1 - math.floor(h1) - 0.5) * 0.70
+            jit_l = (h1 - math.floor(h1) - 0.5) * jit_scale
             h2 = math.sin(i * 27.6543 + stroke_seed) * 43758.5453
-            jit_r = (h2 - math.floor(h2) - 0.5) * 0.70
+            jit_r = (h2 - math.floor(h2) - 0.5) * jit_scale
 
             p.lx += p.nx * jit_l
             p.ly += p.ny * jit_l
@@ -2057,11 +2178,12 @@ def compile_slender_calligraphy_stroke_d(
         limit = len(raw_pts) - 1
 
         if hf and limit > heel_idx:
-            part_a = _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, heel_idx, is_hook_truncated=True)
+            stop_idx = max(8, heel_idx - 5) if hf.get("isDownLeftHook", False) else heel_idx
+            part_a = _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, stop_idx, is_hook_truncated=True, box_size=box_size)
             part_b = _draw_fleshy_hook_wedge_svg(raw_pts, shaft_radius, ton_mult, hf, limit, heel_idx)
             return f"{part_a} {part_b}".strip()
         else:
-            return _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, limit, is_hook_truncated=False)
+            return _trace_smooth_stroke_contour_svg(raw_pts, behavior, hf, limit, is_hook_truncated=False, box_size=box_size)
     except Exception:
         return stroke_d
 
@@ -2323,13 +2445,29 @@ class KanjiVGService:
             m = re.search(r"-s(\d+)", pid)
             path_idx_map[id(pe)] = int(m.group(1)) if m else i
 
-        def parse_group(g: ET.Element) -> dict[str, Any]:
+        def parse_group(
+            g: ET.Element, ancestor_elems: tuple[str, ...] = ()
+        ) -> dict[str, Any]:
             gid = g.attrib.get("id", "")
             raw_elem = g.attrib.get(f"{{{KVG_NS}}}element") or g.attrib.get("kvg:element")
             orig = g.attrib.get(f"{{{KVG_NS}}}original") or g.attrib.get("kvg:original")
             pos = g.attrib.get(f"{{{KVG_NS}}}position") or g.attrib.get("kvg:position")
 
             element, raw_element = normalize_element_symbol(raw_elem)
+            cur_elems = ancestor_elems
+            if element:
+                cur_elems = (*ancestor_elems, element)
+            elif raw_elem:
+                cur_elems = (*ancestor_elems, raw_elem)
+
+            stroke_comp = ""
+            for anc in reversed(cur_elems):
+                if anc in ("子", "了", "孑"):
+                    stroke_comp = anc
+                    break
+            if not stroke_comp and cur_elems:
+                stroke_comp = cur_elems[-1]
+
             node: dict[str, Any] = {
                 "id": gid,
                 "element": element,
@@ -2356,16 +2494,17 @@ class KanjiVGService:
                     )
                     idx = path_idx_map.get(id(child), 1)
                     calligraphy_d = compile_slender_calligraphy_stroke_d(
-                        d, ptype, idx, total_strokes
+                        d, ptype, idx, total_strokes, stroke_comp
                     )
                     node["strokes"].append({
                         "id": pid,
                         "d": d,
                         "type": ptype,
+                        "component": stroke_comp,
                         "calligraphy_d": calligraphy_d,
                     })
                 elif tag == "g":
-                    node["children"].append(parse_group(child))
+                    node["children"].append(parse_group(child, cur_elems))
 
             return node
 
@@ -2555,6 +2694,36 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
     except ET.ParseError:
         return {"has_kvg": False, "all_strokes": [], "layer_strokes": {}, "kvg_tree": None}
 
+    path_comp_map: dict[int, str] = {}
+
+    def _collect_path_components(
+        el: ET.Element, ancestor_elems: tuple[str, ...] = ()
+    ) -> None:
+        cur_elems = ancestor_elems
+        if el.tag.endswith("g"):
+            raw_elem = (
+                el.attrib.get(f"{{{KVG_NS}}}element")
+                or el.attrib.get("kvg:element")
+                or ""
+            )
+            norm_elem, _ = normalize_element_symbol(raw_elem)
+            elem_val = norm_elem or raw_elem
+            if elem_val:
+                cur_elems = (*ancestor_elems, elem_val)
+        elif el.tag.endswith("path"):
+            comp_val = ""
+            for anc in reversed(cur_elems):
+                if anc in ("子", "了", "孑"):
+                    comp_val = anc
+                    break
+            if not comp_val and cur_elems:
+                comp_val = cur_elems[-1]
+            path_comp_map[id(el)] = comp_val
+        for ch_el in el:
+            _collect_path_components(ch_el, cur_elems)
+
+    _collect_path_components(root)
+
     raw_paths = [p for p in root.iter() if p.tag.endswith("path") and p.attrib.get("id") and p.attrib.get("d")]
     total_strokes = max(1, len(raw_paths))
 
@@ -2570,8 +2739,9 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
         )
         m = re.search(r"-s(\d+)", sid)
         idx = int(m.group(1)) if m else i
+        scomp = path_comp_map.get(id(p), "")
         calligraphy_d = compile_slender_calligraphy_stroke_d(
-            sd, ptype, idx, total_strokes
+            sd, ptype, idx, total_strokes, scomp
         )
 
         pts = _parse_svg_path_points(sd)
@@ -2586,6 +2756,7 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
             "id": sid,
             "d": sd,
             "type": ptype,
+            "component": scomp,
             "calligraphy_d": calligraphy_d,
             "bbox": [round(bx, 4), round(by, 4), round(bw, 4), round(bh, 4)],
             "center": (round(cx, 4), round(cy, 4)),
@@ -2613,6 +2784,7 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
                     "id": sid,
                     "d": strokes_map[sid]["d"],
                     "type": strokes_map[sid]["type"],
+                    "component": strokes_map[sid]["component"],
                     "calligraphy_d": strokes_map[sid]["calligraphy_d"],
                 }
                 for sid in direct
