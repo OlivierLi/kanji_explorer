@@ -38,6 +38,8 @@ class TestStaticEndpoints:
             body = resp.read().decode("utf-8")
             assert "<!DOCTYPE html>" in body
             assert "canvasSvgContainer" in body
+            assert "探索例:" not in body
+            assert "U+4E2D" in body
 
     def test_styles_css(self, live_server):
         with urllib.request.urlopen(f"{live_server}/static/styles.css") as resp:

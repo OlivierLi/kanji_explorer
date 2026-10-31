@@ -38,7 +38,7 @@
           type="text" 
           id="mainSearchInput" 
           class="search-input" 
-          placeholder="漢字・構成部品・Unicode (例: 蛍, 𭕄, U+2D544, ほたる) を入力..." 
+          placeholder="漢字・構成部品・Unicode (例: 中, 𭕄, U+4E2D, なか) を入力..." 
           autocomplete="off"
           spellcheck="false"
         >
@@ -49,27 +49,6 @@
       <button id="btnFind" class="btn-secondary" title="この部品を含む漢字を逆引き検索します">
         <span>部品を含む漢字を検索 (ids-find)</span>
       </button>
-    </div>
-
-    <!-- クイック探索プリセット -->
-    <div class="presets-bar">
-      <span class="presets-label">探索例:</span>
-      <button class="preset-chip highlight" data-kanji="蛍" data-drilldown="蛍,𰃮,𭕄">
-        蛍 → 𰃮 → 𭕄(段階展開)
-      </button>
-      <button class="preset-chip" data-kanji="𭕄">𭕄(単体逆引き)</button>
-      <button class="preset-chip" data-kanji="𰃮">𰃮</button>
-      <button class="preset-chip" data-kanji="学">学</button>
-      <button class="preset-chip" data-kanji="栄">栄</button>
-      <button class="preset-chip" data-kanji="単">単</button>
-      <button class="preset-chip" data-kanji="巣">巣</button>
-      <button class="preset-chip" data-kanji="厳">厳</button>
-      <button class="preset-chip" data-kanji="獣">獣</button>
-      <button class="preset-chip" data-kanji="脳">脳</button>
-      <button class="preset-chip" data-kanji="桜">桜</button>
-      <button class="preset-chip" data-kanji="鬱">鬱</button>
-      <button class="preset-chip" data-kanji="龍">龍</button>
-      <button class="preset-chip" data-kanji="𭸼">𭸼</button>
     </div>
   </header>
 
@@ -131,11 +110,11 @@
 
         <!-- リアルタイム・ホバー情報HUD -->
         <div class="hover-hud" id="hoverHud">
-          <div class="hud-glyph-box" id="hudGlyphBox">蛍</div>
+          <div class="hud-glyph-box" id="hudGlyphBox">中</div>
           <div class="hud-details">
             <div class="hud-title-row">
-              <span class="hud-char-name" id="hudCharName">蛍(全体)</span>
-              <span class="hud-codepoint" id="hudCodepoint">U+86CD</span>
+              <span class="hud-char-name" id="hudCharName">中(全体)</span>
+              <span class="hud-codepoint" id="hudCodepoint">U+4E2D</span>
               <span class="hud-raw-orig" id="hudRawOrig"></span>
             </div>
             <div class="hud-trail" id="hudTrail">階層パス: 0 [役割: 全体]</div>
@@ -147,7 +126,7 @@
         <div class="attribute-card" id="attributeCard">
           <div class="attribute-card-title">
             <span>漢字属性・字書情報</span>
-            <span id="attrCharCodepoint">U+86CD</span>
+            <span id="attrCharCodepoint">U+4E2D</span>
           </div>
 
           <div class="meta-grid">

@@ -326,8 +326,8 @@ const DEMO_FIND_DATABASE = [
 // =============================================================================
 
 const state = {
-  currentChar: "蛍",
-  history: ["蛍"],
+  currentChar: "中",
+  history: ["中"],
   historyIndex: 0,
   activeDisplayMode: "kvg", // 'kvg' (KanjiVG筆画表示 - デフォルト), 'mincho' (明朝体印刷書体)
   lockedPath: null,         // 段階的ロック階層パス (例: null, "0.0", "0.0.0")
@@ -336,7 +336,7 @@ const state = {
   hoveredPath: null,
   hoveredAncestors: [],
   wheelIndex: 0,
-  findChips: new Set(["𭕄"]),
+  findChips: new Set(["中"]),
   wordsData: null,
   wordsFilter: {
     position: "all",
@@ -3332,7 +3332,7 @@ function resetHud() {
 
   // デフォルト状態（未固定時）
   hud.classList.remove("active");
-  const cur = state.currentChar || "蛍";
+  const cur = state.currentChar || "中";
   glyphBox.innerHTML = renderGlyphHTML(cur);
   glyphBox.style.opacity = "0.75";
   charName.textContent = `${cur}(全体)`;
@@ -4548,7 +4548,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  const initialChar = urlParams.get("char") || urlParams.get("c") || urlParams.get("q") || "蛍";
+  const initialChar = urlParams.get("char") || urlParams.get("c") || urlParams.get("q") || "中";
   const initialHover = urlParams.get("hover") || urlParams.get("path");
   const initialLock = urlParams.get("lock");
 
