@@ -10,6 +10,7 @@ ids_parser, glyph_service, jp_metadata と連携し、10万字以上の漢字に
 from __future__ import annotations
 
 import argparse
+import email.utils
 import functools
 import json
 import mimetypes
@@ -559,18 +560,44 @@ def query_words_db(
     keyword: str = "",
     limit: int = 60,
     offset: int = 0,
+    scope: str = "all",
 ) -> dict[str, Any]:
     """
-    指定された漢字を含む熟語・単語をSQLiteデータベースから頻度順に取得します。
+    指定された漢字または構成要素（部首）を含む熟語・単語をSQLiteデータベースから頻度順に取得します。
     すべての出力は100%日本語で返却されます。
     """
+    cur = conn.cursor()
     equiv_symbols = glyph_service.get_equivalent_symbols(canonical_char)
     symbols = list({canonical_char} | set(equiv_symbols))
-
     placeholders = ", ".join(["?"] * len(symbols))
-    base_params: list[Any] = list(symbols)
 
-    where_clauses = [f"wk.kanji IN ({placeholders})"]
+    norm_scope = (scope or "all").strip().lower()
+    if norm_scope in ("direct", "exact", "kanji"):
+        norm_scope = "direct"
+    elif norm_scope in ("component", "radical", "parts", "component_closure"):
+        norm_scope = "component"
+    elif norm_scope in ("all", "both", "auto"):
+        norm_scope = "all"
+    else:
+        norm_scope = "all"
+
+    effective_scope = norm_scope
+    is_component_search = effective_scope in ("component", "all")
+
+    # スコープに応じた基底SQLとパラメータの構築
+    if effective_scope == "component":
+        where_clauses = [
+            f"wk.kanji IN (SELECT target_char FROM component_closure WHERE component IN ({placeholders}))"
+        ]
+        base_params: list[Any] = list(symbols)
+    elif effective_scope == "all":
+        where_clauses = [
+            f"(wk.kanji IN ({placeholders}) OR wk.kanji IN (SELECT target_char FROM component_closure WHERE component IN ({placeholders})))"
+        ]
+        base_params = list(symbols) + list(symbols)
+    else:
+        where_clauses = [f"wk.kanji IN ({placeholders})"]
+        base_params = list(symbols)
 
     # 1. 出現位置フィルタ (head / middle / tail / single)
     if position in ("head", "middle", "tail", "single"):
@@ -599,6 +626,8 @@ def query_words_db(
     count_sql = f"""
     SELECT
         COUNT(DISTINCT w.word_id) AS total_count,
+        COUNT(DISTINCT CASE WHEN wk.kanji IN ({placeholders}) THEN w.word_id END) AS count_direct,
+        COUNT(DISTINCT CASE WHEN wk.kanji NOT IN ({placeholders}) THEN w.word_id END) AS count_carrier,
         COUNT(DISTINCT CASE WHEN w.frequency_tier = '最頻出' THEN w.word_id END) AS count_top,
         COUNT(DISTINCT CASE WHEN w.frequency_tier = '頻出' THEN w.word_id END) AS count_high,
         COUNT(DISTINCT CASE WHEN w.frequency_tier = '一般' THEN w.word_id END) AS count_mid,
@@ -612,12 +641,14 @@ def query_words_db(
     JOIN words w ON wk.word_id = w.word_id
     WHERE {where_sql}
     """
-    cur = conn.cursor()
-    count_row = cur.execute(count_sql, base_params).fetchone()
+    count_params = list(symbols) + list(symbols) + base_params
+    count_row = cur.execute(count_sql, count_params).fetchone()
 
     total_count = count_row["total_count"] if count_row else 0
     counts_summary = {
         "total": total_count,
+        "direct": count_row["count_direct"] if count_row else 0,
+        "carrier": count_row["count_carrier"] if count_row else 0,
         "top": count_row["count_top"] if count_row else 0,
         "high": count_row["count_high"] if count_row else 0,
         "mid": count_row["count_mid"] if count_row else 0,
@@ -649,7 +680,8 @@ def query_words_db(
             WHEN 2 THEN 'head'
             WHEN 3 THEN 'middle'
             WHEN 4 THEN 'tail'
-            ELSE 'middle' END AS position_type
+            ELSE 'middle' END AS position_type,
+        GROUP_CONCAT(DISTINCT wk.kanji) AS matched_kanji
     FROM word_kanji wk
     JOIN words w ON wk.word_id = w.word_id
     WHERE {where_sql}
@@ -675,6 +707,16 @@ def query_words_db(
         f_rank = r["frequency_rank"]
         display_rank = f"#{f_rank}" if f_rank and f_rank < 9999990 else "未詳"
 
+        matched_str = (
+            r["matched_kanji"]
+            if "matched_kanji" in r.keys() and r["matched_kanji"]
+            else canonical_char
+        )
+        matched_list = [k.strip() for k in matched_str.split(",") if k.strip()]
+
+        has_direct_kanji = any(k in symbols for k in matched_list)
+        carrier_kanjis = [k for k in matched_list if k not in symbols]
+
         results.append({
             "word_id": r["word_id"],
             "lemma": r["lemma"],
@@ -687,6 +729,10 @@ def query_words_db(
             "frequency_tier": r["frequency_tier"] or "専門・稀少",
             "position_type": r["position_type"],
             "source": r["source"] or "辞書",
+            "matched_kanji": matched_str,
+            "matched_kanjis": matched_list,
+            "has_direct_kanji": has_direct_kanji,
+            "carrier_kanjis": carrier_kanjis,
         })
 
     return {
@@ -694,20 +740,30 @@ def query_words_db(
         "total": total_count,
         "limit": limit,
         "offset": offset,
+        "scope": effective_scope,
+        "is_component_search": is_component_search,
         "summary": counts_summary,
         "results": results,
     }
 
 
-def query_words_fallback(canonical_char: str) -> dict[str, Any]:
+def query_words_fallback(
+    canonical_char: str,
+    scope: str = "all",
+    is_component_search: bool = False,
+) -> dict[str, Any]:
     """DB非接続時のインメモリ語彙検索フォールバック処理。"""
     return {
         "kanji": canonical_char,
         "total": 0,
         "limit": 60,
         "offset": 0,
+        "scope": scope,
+        "is_component_search": is_component_search,
         "summary": {
             "total": 0,
+            "direct": 0,
+            "carrier": 0,
             "top": 0,
             "high": 0,
             "mid": 0,
@@ -893,13 +949,62 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         content_type = mime_map.get(ext) or mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
 
         try:
-            file_size = file_path.stat().st_size
-            self.send_response(200)
+            stat_res = file_path.stat()
+            file_size = stat_res.st_size
+            mtime = stat_res.st_mtime
+
+            # ETag および Last-Modified の生成
+            etag = f'"{int(mtime)}-{file_size}"'
+            last_modified = email.utils.formatdate(mtime, usegmt=True)
+
+            # キャッシュ制御ポリシー
+            # フォントファイル (.ttf, .woff, .woff2) は大容量かつ不変のため1年間の不変キャッシュを設定
+            if ext in (".ttf", ".woff", ".woff2", ".otf", ".eot"):
+                cache_control = "public, max-age=31536000, immutable"
+            elif ext in (".css", ".js"):
+                cache_control = "public, max-age=3600"
+            else:
+                cache_control = "public, max-age=3600"
+
+            # 条件付きリクエスト (304 Not Modified) の判定
+            req_headers = getattr(self, "headers", None)
+            if_none_match = req_headers.get("If-None-Match") if req_headers else None
+            if_modified_since = req_headers.get("If-Modified-Since") if req_headers else None
+
+            if if_none_match and if_none_match.strip() == etag:
+                self.send_response(HTTPStatus.NOT_MODIFIED)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache_control)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                return
+
+            if if_modified_since and not if_none_match:
+                try:
+                    ims_time = email.utils.parsedate_to_datetime(if_modified_since).timestamp()
+                    if ims_time >= int(mtime):
+                        self.send_response(HTTPStatus.NOT_MODIFIED)
+                        self.send_header("ETag", etag)
+                        self.send_header("Cache-Control", cache_control)
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        return
+                except Exception:
+                    pass
+
+            self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(file_size))
-            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", last_modified)
+            self.send_header("Accept-Ranges", "bytes")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
+
+            if self.command == "HEAD":
+                return
+
             with open(file_path, "rb") as f:
                 while True:
                     chunk = f.read(65536)
@@ -1351,6 +1456,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
 
         position = params.get("position", ["all"])[0].lower()
         tier = params.get("tier", ["all"])[0].lower()
+        scope = (params.get("scope", [""])[0] or params.get("mode", ["auto"])[0]).lower()
         keyword = (
             params.get("keyword", [""])[0]
             or params.get("query", [""])[0]
@@ -1384,13 +1490,14 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                         keyword=keyword,
                         limit=limit,
                         offset=offset,
+                        scope=scope,
                     )
                 else:
-                    words_data = query_words_fallback(canonical_char)
+                    words_data = query_words_fallback(canonical_char, scope=scope)
             except sqlite3.Error:
-                words_data = query_words_fallback(canonical_char)
+                words_data = query_words_fallback(canonical_char, scope=scope)
         else:
-            words_data = query_words_fallback(canonical_char)
+            words_data = query_words_fallback(canonical_char, scope=scope)
 
         self._send_json_response(words_data)
 
@@ -1465,6 +1572,18 @@ class WSGIHandlerAdapter(KanjiExplorerHandler):
         self.headers_out: list[tuple[str, str]] = []
         self.wfile = io.BytesIO()
 
+        # WSGI 環境下で If-None-Match / If-Modified-Since 等のHTTPリクエストヘッダーを透過
+        import email.message
+        msg = email.message.Message()
+        for k, v in environ.items():
+            if k.startswith("HTTP_"):
+                header_name = k[5:].replace("_", "-").title()
+                msg[header_name] = str(v)
+            elif k in ("CONTENT_TYPE", "CONTENT_LENGTH"):
+                header_name = k.replace("_", "-").title()
+                msg[header_name] = str(v)
+        self.headers = msg
+
     def send_response(self, code: int, message: str | None = None) -> None:
         self.status_code = code
         try:
@@ -1534,10 +1653,25 @@ def run_internal_self_tests() -> bool:
         with urllib.request.urlopen(f"{base_url}/static/fonts/Jigmo.ttf") as resp:
             assert resp.status == 200
             assert "font/ttf" in resp.headers.get("Content-Type", "")
-            assert "max-age=3600" in resp.headers.get("Cache-Control", "")
+            assert "max-age=31536000" in resp.headers.get("Cache-Control", "")
+            assert "immutable" in resp.headers.get("Cache-Control", "")
+            etag = resp.headers.get("ETag")
+            assert etag is not None
             font_chunk = resp.read(8192)
             assert len(font_chunk) > 0
-            print("✓ GET /static/fonts/Jigmo.ttf: 正常(MIMEタイプ・キャッシュヘッダー合致)")
+            print("✓ GET /static/fonts/Jigmo.ttf: 正常(フォント不変1年キャッシュ・ETag合致)")
+
+        # 2b. 条件付きリクエスト (304 Not Modified) の検証
+        req_304 = urllib.request.Request(
+            f"{base_url}/static/fonts/Jigmo.ttf",
+            headers={"If-None-Match": etag},
+        )
+        try:
+            with urllib.request.urlopen(req_304) as resp:
+                assert resp.status == 304
+        except urllib.error.HTTPError as e:
+            assert e.code == 304
+            print("✓ GET /static/fonts/Jigmo.ttf (If-None-Match): 正常(304 Not Modified合致)")
 
         # 3. GET /api/glyph
         for glyph_c in ["蛍", "𰃮", "𭕄", "&CDP-8BD9;"]:

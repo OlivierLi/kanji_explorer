@@ -20,6 +20,10 @@
       </div>
 
       <div class="header-controls">
+        <button id="btnCreditsModal" class="credits-btn" title="データ出典・ライセンス情報を表示します" aria-haspopup="dialog">
+          <span class="credits-icon">📜</span>
+          <span class="credits-btn-text">出典・ライセンス</span>
+        </button>
         <button id="themeToggleBtn" class="theme-toggle-btn" title="明暗外観テーマを切り替えます">
           <span class="theme-icon">◐</span>
           <span id="themeToggleText">外観: 明色</span>
@@ -343,7 +347,14 @@
           <!-- フィルタコントロール群 -->
           <div class="words-filters-group">
             <div class="filter-row">
-              <span class="filter-label">出現位置:</span>
+              <span class="filter-label">探索対象:</span>
+              <select id="filterWordScope" class="filter-select">
+                <option value="all" selected>すべて (直接・青 ＋ 部品・緑)</option>
+                <option value="direct">漢字直接のみ (青)</option>
+                <option value="component">部首・構成要素のみ (緑)</option>
+              </select>
+
+              <span class="filter-label" style="margin-left: 8px;">出現位置:</span>
               <select id="filterWordPosition" class="filter-select">
                 <option value="all">すべて</option>
                 <option value="head">語頭(前)</option>
@@ -351,8 +362,9 @@
                 <option value="tail">語尾(後)</option>
                 <option value="single">単独</option>
               </select>
-
-              <span class="filter-label" style="margin-left: 8px;">頻度区分:</span>
+            </div>
+            <div class="filter-row">
+              <span class="filter-label">頻度区分:</span>
               <select id="filterWordTier" class="filter-select">
                 <option value="all">すべて</option>
                 <option value="top">最頻出(日常最重要)</option>
@@ -369,6 +381,7 @@
             収録熟語: <span class="results-count-highlight" id="wordsTotalCount">0</span> 語
             (最頻出: <span id="wordsTopCount">0</span> 語 ／ 頻出: <span id="wordsHighCount">0</span> 語)
           </span>
+          <span id="wordsModeBadge" class="words-mode-indicator" style="display: none;"></span>
         </div>
 
         <!-- 熟語一覧グリッド / リスト -->
@@ -379,6 +392,147 @@
     </section>
 
   </main>
+
+  <!-- 出典・ライセンスモーダルダイアログ (Credits & Licenses Modal) -->
+  <div id="creditsModal" class="modal-backdrop" aria-hidden="true" style="display: none;">
+    <div class="modal-dialog credits-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="creditsModalTitle">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-title-icon">📜</span>
+          <h2 id="creditsModalTitle" class="modal-title">データ出典・ライセンス情報 (Credits &amp; Licenses)</h2>
+        </div>
+        <button id="creditsModalCloseBtn" class="modal-close-btn" aria-label="閉じる" title="閉じる (Esc)">✕</button>
+      </div>
+
+      <div class="modal-body credits-modal-body">
+        <div class="credits-intro-banner">
+          <p>本システム<strong>「漢字構造・部首ドリルダウン探索器」</strong>は、オープンデータ、学術研究コーパス、自由書体フォントを統合した<strong>非営利・教育目的の個人研究プロジェクト</strong>です。以下の各オープンリソースおよび開発コミュニティに深く感謝申し上げます。</p>
+        </div>
+
+        <div class="credits-grid">
+          <!-- 1. KanjiVG -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-sa">CC BY-SA 3.0</span>
+              <h3 class="credit-source-title">KanjiVG</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">作成者: Ulrich Apel 氏およびプロジェクト寄稿者</span>
+              <a href="https://kanjivg.tagaini.net/" target="_blank" rel="noopener noreferrer" class="credit-link">公式ウェブサイト ↗</a>
+            </div>
+            <p class="credit-desc">手書き筆順データ、ベクター運筆パス（SVG）、永字八法・CJK筆画タイプ分類、および部品所属階層情報を提供。本システムでは構文木アライメントおよび墨絵書道キャンバス描画に最適化して活用しています。</p>
+          </div>
+
+          <!-- 2. KANJIDIC2 -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-sa">CC BY-SA 4.0</span>
+              <h3 class="credit-source-title">KANJIDIC2</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">提供: Electronic Dictionary Research and Development Group (EDRDG / Jim Breen 氏)</span>
+              <a href="https://www.edrdg.org/wiki/index.php/KANJIDIC_Project" target="_blank" rel="noopener noreferrer" class="credit-link">EDRDG 公式 ↗</a>
+            </div>
+            <p class="credit-desc">常用漢字・人名用漢字を含む13,000字以上の画数、部首番号、小学校配当学年、新聞頻度順位、日本語能力試験（JLPT）レベル、音訓読み、大漢和番号、四角号碼メタデータを提供しています。</p>
+          </div>
+
+          <!-- 3. 日本語版 Wiktionary -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-sa">CC BY-SA 3.0 / 4.0</span>
+              <h3 class="credit-source-title">日本語版 Wiktionary (via Kaikki.org)</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">提供: ウィクショナリー寄稿者 / Kaikki.org (Tatu Ylonen 氏)</span>
+              <a href="https://ja.wiktionary.org/" target="_blank" rel="noopener noreferrer" class="credit-link">ja.wiktionary.org ↗</a>
+            </div>
+            <p class="credit-desc">10万語を超える見出し語、現代日本語語釈、品詞分類、読み仮名データを提供。漢字熟語辞書の基礎語釈として統合されています。</p>
+          </div>
+
+          <!-- 4. BCCWJ -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-academic">研究・教育利用</span>
+              <h3 class="credit-source-title">現代日本語書き言葉均衡コーパス (BCCWJ)</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">提供: 大学共同利用機関法人 人間文化研究機構 国立国語研究所 (NINJAL)</span>
+              <a href="https://clrd.ninjal.ac.jp/bccwj/" target="_blank" rel="noopener noreferrer" class="credit-link">NINJAL BCCWJ ↗</a>
+            </div>
+            <p class="credit-desc">長単位語（LUW）出現頻度順位および高信頼読み仮名データを利用。単語リストの重要度ソートおよび頻度区分バッジ（最頻出〜発展語）判定に使用されています。※完全非営利・教育目的の規程に準拠。</p>
+          </div>
+
+          <!-- 5. NICT 日本語 WordNet -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-permissive">WordNet License</span>
+              <h3 class="credit-source-title">NICT 日本語 WordNet</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">著作権: © 2009, 2010 情報通信研究機構 (NICT)</span>
+              <a href="https://bond-lab.github.io/wnja/" target="_blank" rel="noopener noreferrer" class="credit-link">NICT WordNet ↗</a>
+            </div>
+            <p class="credit-desc">日本語概念定義・シノセット・精緻な概念説明テキストを提供。Wiktionary語釈のフォールバック・補完として活用されています。</p>
+          </div>
+
+          <!-- 6. CHISE IDS & CJKVI-IDS -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-gpl">GNU GPL / Open Data</span>
+              <h3 class="credit-source-title">CHISE IDS &amp; CJKVI-IDS</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">提供: 京都大学人文科学研究所 CHISE プロジェクト / CJKVI Database</span>
+              <a href="https://www.chise.org/" target="_blank" rel="noopener noreferrer" class="credit-link">CHISE 公式 ↗</a>
+            </div>
+            <p class="credit-desc">16種の漢字構成記述文字（IDC）に基づく10万文字以上の再帰的構文木分解データ。下位部品探索および包含漢字閉包テーブルの構築に用いられています。</p>
+          </div>
+
+          <!-- 7. Jigmo フォント & GlyphWiki -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-cc0">CC0 1.0 (Public Domain)</span>
+              <h3 class="credit-source-title">Jigmo フォント &amp; GlyphWiki</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">提供: GlyphWiki コミュニティ / かみち 氏</span>
+              <a href="https://glyphwiki.org/" target="_blank" rel="noopener noreferrer" class="credit-link">GlyphWiki ↗</a>
+            </div>
+            <p class="credit-desc">145,000字以上の明朝体ベクター輪郭線データ（TrueType）を提供。印刷書体アウトライン展開および連結インク・白抜き穴スライス解析に使用されています。</p>
+          </div>
+
+          <!-- 8. Unicode Consortium -->
+          <div class="credit-card">
+            <div class="credit-card-header">
+              <span class="credit-badge badge-unicode">Unicode Terms</span>
+              <h3 class="credit-source-title">Unicode Unihan &amp; UCD</h3>
+            </div>
+            <div class="credit-meta">
+              <span class="credit-author">著作権: © 1991–2026 Unicode, Inc. All rights reserved.</span>
+              <a href="https://www.unicode.org/copyright.html" target="_blank" rel="noopener noreferrer" class="credit-link">Terms of Use ↗</a>
+            </div>
+            <p class="credit-desc">拡張漢字の画数・部首余画・文字情報基盤ID・倉頡コード、および康熙部首・部首補助と統合漢字の等価対応正規化テーブル（EquivalentUnifiedIdeograph）を提供。</p>
+          </div>
+        </div>
+
+        <!-- 継承 (ShareAlike) および非営利ポリシー -->
+        <div class="credits-policy-section">
+          <div class="credits-policy-card">
+            <h4>📌 継承（ShareAlike）条項の遵守</h4>
+            <p>KanjiVG, KANJIDIC2, Wiktionary の CC BY-SA ライセンス条項に基づき、本サイトが独自に構造解析・再構成した漢字構成データ、派生アノテーション、辞書統合インデックスは同一の <strong>Creative Commons 表示 - 継承 (CC BY-SA 4.0)</strong> の下で再配布・二次利用が認められます。本システムのソースコードはオープンソース（GPL / MIT）として公開されています。</p>
+          </div>
+          <div class="credits-policy-card">
+            <h4>🎓 非営利・教育目的の明記 (BCCWJ準拠)</h4>
+            <p>国立国語研究所 (NINJAL) BCCWJ 語彙表データは、学術・教育目的の無償利用条件に基づき単語頻度順位表示に活用されています。本サービスは広告掲載・有料課金・商用提供を行わない完全非営利の教育・研究目的として運用されています。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="creditsModalCloseFooterBtn" class="btn-primary modal-action-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

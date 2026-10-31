@@ -812,10 +812,12 @@ class TestFourthColumnWordsUI:
         assert 'id="columnWords"' in html_text
         assert "収録熟語・語彙(国語辞典)" in html_text
         assert 'id="wordsKeywordInput"' in html_text
+        assert 'id="filterWordScope"' in html_text
         assert 'id="filterWordPosition"' in html_text
         assert 'id="filterWordTier"' in html_text
         assert 'id="wordsGrid"' in html_text
         assert 'id="wordsTotalCount"' in html_text
+        assert 'id="wordsModeBadge"' in html_text
 
     def test_fourth_column_css_styling(self):
         css_path = Path(__file__).resolve().parent.parent / "static" / "styles.css"
@@ -828,6 +830,9 @@ class TestFourthColumnWordsUI:
         assert ".badge-freq-top" in css_text
         assert ".badge-pos" in css_text
         assert ".badge-position" in css_text
+        assert ".badge-carrier" in css_text
+        assert ".highlight-carrier" in css_text
+        assert ".words-mode-indicator" in css_text
 
     def test_fourth_column_js_logic(self):
         js_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
@@ -838,6 +843,7 @@ class TestFourthColumnWordsUI:
         assert "renderWordsGrid" in js_text
         assert "/api/words" in js_text
         assert "wordsFilter" in js_text
+        assert "filterWordScope" in js_text
 
 
 class TestBugRadicalFormMapAlignment:

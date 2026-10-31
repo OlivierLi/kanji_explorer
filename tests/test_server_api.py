@@ -52,7 +52,36 @@ class TestStaticEndpoints:
     def test_jigmo_font(self, live_server):
         with urllib.request.urlopen(f"{live_server}/static/fonts/Jigmo.ttf") as resp:
             assert resp.status == 200
-            assert "font" in resp.headers.get("Content-Type", "").lower() or resp.status == 200
+            assert "font/ttf" in resp.headers.get("Content-Type", "")
+            cache_control = resp.headers.get("Cache-Control", "")
+            assert "max-age=31536000" in cache_control
+            assert "immutable" in cache_control
+            assert resp.headers.get("ETag") is not None
+            assert resp.headers.get("Last-Modified") is not None
+
+    def test_font_caching_and_conditional_request(self, live_server):
+        url = f"{live_server}/static/fonts/Jigmo.ttf"
+        with urllib.request.urlopen(url) as resp:
+            etag = resp.headers.get("ETag")
+            assert etag is not None
+
+        # If-None-Match による 304 Not Modified 検証
+        req = urllib.request.Request(url, headers={"If-None-Match": etag})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                assert resp.status == 304
+        except urllib.error.HTTPError as e:
+            assert e.code == 304
+            assert e.headers.get("ETag") == etag
+            assert "max-age=31536000" in e.headers.get("Cache-Control", "")
+
+    def test_root_contains_credits_modal(self, live_server):
+        with urllib.request.urlopen(f"{live_server}/") as resp:
+            assert resp.status == 200
+            html_text = resp.read().decode("utf-8")
+            assert "creditsModal" in html_text
+            assert "btnCreditsModal" in html_text
+            assert "出典・ライセンス" in html_text
 
 
 class TestApiGlyph:
@@ -248,6 +277,121 @@ class TestApiWords:
         assert fallback["total"] == 0
         assert fallback["results"] == []
         assert "summary" in fallback
+
+    def test_api_words_component_exploration_for_radical_symbol(self, live_server):
+        """非漢字構成要素（部首「𭕄」など）選択時に包含漢字の熟語（学校 等）が自動返却されること."""
+        url = f"{live_server}/api/words?kanji=%F0%AD%95%84"  # 𭕄 (U+2D544)
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data.get("kanji") == "𭕄"
+            assert data.get("is_component_search") is True
+            assert data.get("scope") == "all"
+            assert data.get("total", 0) > 1000
+
+            results = data.get("results", [])
+            assert len(results) > 0
+            lemmas = [r["lemma"] for r in results]
+
+            # 𭕄 を含む「学」「単」「覚」等の熟語が含まれること
+            assert "学校" in lemmas
+            assert "簡単" in lemmas
+            assert "大学" in lemmas
+            assert "覚える" in lemmas
+
+            # 「学校」の matched_kanji が「学」として記録されていること
+            gakko_item = next(r for r in results if r["lemma"] == "学校")
+            assert "学" in gakko_item["matched_kanji"]
+            assert "学" in gakko_item["matched_kanjis"]
+            assert gakko_item["position_type"] == "head"
+            assert gakko_item["has_direct_kanji"] is False
+            assert "学" in gakko_item["carrier_kanjis"]
+
+    def test_api_words_both_direct_kanji_and_subparts_for_kanji(self, live_server):
+        """「缶」選択時に、漢字直接熟語（缶、空き缶 等）と部品として含む熟語（鬱病 等）の双方が返却されること."""
+        url = f"{live_server}/api/words?kanji=%E7%BC%B6"  # 缶 (U+7F36)
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data.get("kanji") == "缶"
+            assert data.get("scope") == "all"
+            assert data.get("is_component_search") is True
+            assert data.get("summary", {}).get("direct", 0) > 0
+            assert data.get("summary", {}).get("carrier", 0) > 0
+
+            results = data.get("results", [])
+            lemmas = [r["lemma"] for r in results]
+
+            # 漢字直接熟語および下位部品熟語（鬱病）が共存すること
+            assert "缶" in lemmas
+            assert "鬱病" in lemmas
+
+            kan_item = next(r for r in results if r["lemma"] == "缶")
+            assert kan_item["has_direct_kanji"] is True
+            assert kan_item["carrier_kanjis"] == []
+
+            utsu_item = next(r for r in results if r["lemma"] == "鬱病")
+            assert utsu_item["has_direct_kanji"] is False
+            assert "鬱" in utsu_item["carrier_kanjis"]
+
+    def test_api_words_component_position_filters(self, live_server):
+        """部首探索時の出現位置フィルタ（語頭・語尾）の適合性検証."""
+        # 語頭(head)
+        url_head = f"{live_server}/api/words?kanji=%F0%AD%95%84&position=head"
+        with urllib.request.urlopen(url_head) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            lemmas = [r["lemma"] for r in data.get("results", [])]
+            assert "学校" in lemmas
+            for r in data.get("results", []):
+                assert r["position_type"] == "head"
+
+        # 語尾(tail)
+        url_tail = f"{live_server}/api/words?kanji=%F0%AD%95%84&position=tail"
+        with urllib.request.urlopen(url_tail) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            lemmas = [r["lemma"] for r in data.get("results", [])]
+            assert "大学" in lemmas or "簡単" in lemmas
+            for r in data.get("results", []):
+                assert r["position_type"] == "tail"
+
+    def test_api_words_explicit_scope_modes(self, live_server):
+        """明示的スコープ指定（component / direct）の動作切り替え検証."""
+        # 「木」を部首として含む熟語探索（校、森、林 などを含む学校、森林等）
+        url_comp = f"{live_server}/api/words?kanji=%E6%9C%A8&scope=component"
+        with urllib.request.urlopen(url_comp) as resp:
+            data_comp = json.loads(resp.read().decode("utf-8"))
+            assert data_comp["scope"] == "component"
+            assert data_comp["is_component_search"] is True
+            lemmas_comp = [r["lemma"] for r in data_comp.get("results", [])]
+            assert "学校" in lemmas_comp  # 「校」が木を含む
+
+        # 「木」の直接熟語探索（木材、樹木等）
+        url_direct = f"{live_server}/api/words?kanji=%E6%9C%A8&scope=direct"
+        with urllib.request.urlopen(url_direct) as resp:
+            data_direct = json.loads(resp.read().decode("utf-8"))
+            assert data_direct["scope"] == "direct"
+            assert data_direct["is_component_search"] is False
+            lemmas_direct = [r["lemma"] for r in data_direct.get("results", [])]
+            assert "学校" not in lemmas_direct
+            assert "木材" in lemmas_direct or "樹木" in lemmas_direct
+
+        # 「木」の scope=all（直接＋部品包含の全結合）
+        url_all = f"{live_server}/api/words?kanji=%E6%9C%A8&scope=all"
+        with urllib.request.urlopen(url_all) as resp:
+            data_all = json.loads(resp.read().decode("utf-8"))
+            assert data_all["scope"] == "all"
+            assert data_all["is_component_search"] is True
+            assert data_all["total"] > data_direct["total"]
+
+    def test_api_words_sanzui_radical_exploration(self, live_server):
+        """さんずい部首（氵）による熟語探索で包含漢字熟語が返却されること."""
+        url = f"{live_server}/api/words?kanji=%E6%B0%B5"  # 氵
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["is_component_search"] is True
+            assert data["scope"] == "all"
+            assert data["total"] > 1000
 
 
 class TestWSGIApplication:

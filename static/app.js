@@ -341,7 +341,8 @@ const state = {
   wordsFilter: {
     position: "all",
     tier: "all",
-    keyword: ""
+    keyword: "",
+    scope: "all"
   },
   theme: (typeof localStorage !== "undefined" && localStorage.getItem("kanji_theme")) || "light"
 };
@@ -3966,8 +3967,9 @@ async function loadWordsForCurrentKanji() {
   const posFilter = state.wordsFilter.position || "all";
   const tierFilter = state.wordsFilter.tier || "all";
   const keyword = state.wordsFilter.keyword || "";
+  const scopeFilter = state.wordsFilter.scope || "auto";
 
-  const url = `/api/words?kanji=${encodeURIComponent(targetKanji)}&position=${encodeURIComponent(posFilter)}&tier=${encodeURIComponent(tierFilter)}&keyword=${encodeURIComponent(keyword)}&limit=100`;
+  const url = `/api/words?kanji=${encodeURIComponent(targetKanji)}&scope=${encodeURIComponent(scopeFilter)}&position=${encodeURIComponent(posFilter)}&tier=${encodeURIComponent(tierFilter)}&keyword=${encodeURIComponent(keyword)}&limit=100`;
 
   try {
     const res = await fetch(url, { signal: wordsAbortController.signal });
@@ -3979,13 +3981,35 @@ async function loadWordsForCurrentKanji() {
 
     const total = data.total || 0;
     const summary = data.summary || {};
+    const isComponent = !!data.is_component_search;
 
     if (wordsTotalBadge) wordsTotalBadge.textContent = `${total}語`;
     if (wordsTotalCount) wordsTotalCount.textContent = total;
     if (wordsTopCount) wordsTopCount.textContent = summary.top || 0;
     if (wordsHighCount) wordsHighCount.textContent = summary.high || 0;
 
-    renderWordsGrid(data.results || [], targetKanji);
+    const wordsModeBadge = document.getElementById("wordsModeBadge");
+    if (wordsModeBadge) {
+      const dCount = summary.direct !== undefined ? summary.direct : 0;
+      const cCount = summary.carrier !== undefined ? summary.carrier : 0;
+      if (dCount > 0 && cCount > 0) {
+        wordsModeBadge.style.display = "inline-flex";
+        wordsModeBadge.innerHTML = `<span style="color:var(--accent-primary);font-weight:700;">漢字(青) ${dCount}語</span><span style="margin:0 4px;opacity:0.5;">/</span><span style="color:#16a34a;font-weight:700;">部品(緑) ${cCount}語</span>`;
+        wordsModeBadge.title = `「${targetKanji}」自身を含む熟語(${dCount}語)と、構成要素として含む熟語(${cCount}語)を統合表示中`;
+      } else if (cCount > 0) {
+        wordsModeBadge.style.display = "inline-flex";
+        wordsModeBadge.innerHTML = `<span style="color:#16a34a;font-weight:700;">部品「${targetKanji}」包含(緑) ${cCount}語</span>`;
+        wordsModeBadge.title = `「${targetKanji}」を構成要素・部首として含む熟語を表示中`;
+      } else if (dCount > 0) {
+        wordsModeBadge.style.display = "inline-flex";
+        wordsModeBadge.innerHTML = `<span style="color:var(--accent-primary);font-weight:700;">漢字「${targetKanji}」(青) ${dCount}語</span>`;
+        wordsModeBadge.title = `「${targetKanji}」自身を含む熟語を表示中`;
+      } else {
+        wordsModeBadge.style.display = "none";
+      }
+    }
+
+    renderWordsGrid(data.results || [], targetKanji, isComponent);
   } catch (err) {
     if (err.name === "AbortError") return;
     if (wordsGrid) {
@@ -3999,7 +4023,7 @@ async function loadWordsForCurrentKanji() {
   }
 }
 
-function renderWordsGrid(words, currentKanji) {
+function renderWordsGrid(words, currentKanji, isComponentSearch = false) {
   const wordsGrid = document.getElementById("wordsGrid");
   if (!wordsGrid) return;
   wordsGrid.innerHTML = "";
@@ -4028,11 +4052,16 @@ function renderWordsGrid(words, currentKanji) {
     const lemmaSpan = document.createElement("span");
     lemmaSpan.className = "word-lemma";
 
-    // 提示漢字をハイライト
+    // 提示漢字（青）および構成部品漢字（緑）をハイライト
+    const matchedKanjiList = (w.matched_kanjis || (w.matched_kanji || "").split(",")).map(k => k.trim()).filter(Boolean);
+    const directSymbols = [currentKanji, ...(state.charData?.meta?.equivalents || [])];
+
     let lemmaHtml = "";
     for (const ch of (w.lemma || "")) {
-      if (ch === currentKanji) {
-        lemmaHtml += `<span class="highlight-kanji">${escapeAttr(ch)}</span>`;
+      if (directSymbols.includes(ch)) {
+        lemmaHtml += `<span class="highlight-kanji" title="「${escapeAttr(currentKanji)}」自体を含む漢字">${escapeAttr(ch)}</span>`;
+      } else if (matchedKanjiList.includes(ch)) {
+        lemmaHtml += `<span class="highlight-carrier" title="「${escapeAttr(currentKanji)}」を構成要素として含む漢字: ${escapeAttr(ch)}">${escapeAttr(ch)}</span>`;
       } else {
         lemmaHtml += escapeAttr(ch);
       }
@@ -4048,7 +4077,7 @@ function renderWordsGrid(words, currentKanji) {
     }
     topRow.appendChild(lemmaGroup);
 
-    // バッジ群（頻度、位置、品詞）
+    // バッジ群（頻度、位置、品詞、直接/部品キャリア）
     const badgesRow = document.createElement("div");
     badgesRow.className = "word-badges-row";
 
@@ -4066,6 +4095,31 @@ function renderWordsGrid(words, currentKanji) {
       ? `${tier} ${w.frequency_display}`
       : tier;
     badgesRow.appendChild(freqBadge);
+
+    const carriers = (w.carrier_kanjis && w.carrier_kanjis.length > 0)
+      ? w.carrier_kanjis
+      : matchedKanjiList.filter(k => !directSymbols.includes(k));
+    const hasDirect = (w.has_direct_kanji !== undefined)
+      ? w.has_direct_kanji
+      : (w.lemma && directSymbols.some(s => w.lemma.includes(s)));
+
+    // 漢字直接一致バッジ（青）
+    if (hasDirect) {
+      const directBadge = document.createElement("span");
+      directBadge.className = "badge badge-direct-match";
+      directBadge.textContent = `漢字: ${currentKanji}`;
+      directBadge.title = `「${currentKanji}」自体を含む漢字熟語`;
+      badgesRow.appendChild(directBadge);
+    }
+
+    // 部品キャリアバッジ（緑）
+    if (carriers.length > 0) {
+      const carrierBadge = document.createElement("span");
+      carrierBadge.className = "badge badge-carrier";
+      carrierBadge.textContent = `部品: ${carriers.join("・")}`;
+      carrierBadge.title = `この熟語内の「${carriers.join("・")}」が「${currentKanji}」を構成要素として含みます`;
+      badgesRow.appendChild(carrierBadge);
+    }
 
     // 出現位置バッジ
     if (w.position_type) {
@@ -4201,6 +4255,46 @@ function updateBreadcrumbsUI() {
 // =============================================================================
 
 function initEventListeners() {
+  // 出典・ライセンスモーダル制御
+  const btnCreditsModal = document.getElementById("btnCreditsModal");
+  const creditsModal = document.getElementById("creditsModal");
+  const creditsModalCloseBtn = document.getElementById("creditsModalCloseBtn");
+  const creditsModalCloseFooterBtn = document.getElementById("creditsModalCloseFooterBtn");
+
+  function openCreditsModal() {
+    if (!creditsModal) return;
+    creditsModal.style.display = "flex";
+    creditsModal.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeCreditsModal() {
+    if (!creditsModal) return;
+    creditsModal.style.display = "none";
+    creditsModal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+  }
+
+  if (btnCreditsModal && creditsModal) {
+    btnCreditsModal.addEventListener("click", openCreditsModal);
+    if (creditsModalCloseBtn) {
+      creditsModalCloseBtn.addEventListener("click", closeCreditsModal);
+    }
+    if (creditsModalCloseFooterBtn) {
+      creditsModalCloseFooterBtn.addEventListener("click", closeCreditsModal);
+    }
+    creditsModal.addEventListener("click", (e) => {
+      if (e.target === creditsModal) {
+        closeCreditsModal();
+      }
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && creditsModal.style.display === "flex") {
+        closeCreditsModal();
+      }
+    });
+  }
+
   // テーマ切替
   const themeBtn = document.getElementById("themeToggleBtn");
   if (themeBtn) {
@@ -4396,6 +4490,14 @@ function initEventListeners() {
     });
   }
 
+  const filterWordScope = document.getElementById("filterWordScope");
+  if (filterWordScope) {
+    filterWordScope.addEventListener("change", (e) => {
+      state.wordsFilter.scope = e.target.value;
+      loadWordsForCurrentKanji();
+    });
+  }
+
   const filterWordPos = document.getElementById("filterWordPosition");
   if (filterWordPos) {
     filterWordPos.addEventListener("change", (e) => {
@@ -4415,8 +4517,9 @@ function initEventListeners() {
   const btnClearWords = document.getElementById("btnClearWordsFilter");
   if (btnClearWords) {
     btnClearWords.addEventListener("click", () => {
-      state.wordsFilter = { position: "all", tier: "all", keyword: "" };
+      state.wordsFilter = { position: "all", tier: "all", keyword: "", scope: "all" };
       if (wordsInput) wordsInput.value = "";
+      if (filterWordScope) filterWordScope.value = "all";
       if (filterWordPos) filterWordPos.value = "all";
       if (filterWordTier) filterWordTier.value = "all";
       loadWordsForCurrentKanji();

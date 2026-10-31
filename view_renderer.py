@@ -201,6 +201,8 @@ def render_side_by_side_html(
             {
                 "id": s["id"],
                 "d": s["d"],
+                "adjusted_d": s.get("adjusted_d", s["d"]),
+                "role_hint": s.get("role_hint", ""),
                 "type": s.get("type", ""),
                 "component": s.get("component", ""),
             }
