@@ -72,18 +72,20 @@ def collect_reachable_entities(
     cur = conn.cursor()
 
     if scope == "all":
-        cur.execute("SELECT char FROM characters")
+        cur.execute("SELECT char, apparent_ids, cjkvi_ids FROM characters")
     elif scope == "joyo":
-        cur.execute("SELECT char FROM characters WHERE grade IS NOT NULL")
+        cur.execute(
+            "SELECT char, apparent_ids, cjkvi_ids FROM characters WHERE grade IS NOT NULL"
+        )
     else:  # joyo_basic
         cur.execute(
-            "SELECT char FROM characters WHERE grade IS NOT NULL OR tier = '基本漢字'"
+            "SELECT char, apparent_ids, cjkvi_ids FROM characters WHERE grade IS NOT NULL OR tier = '基本漢字'"
         )
 
-    chars = [r[0] for r in cur.fetchall()]
+    rows = cur.fetchall()
     conn.close()
 
-    print(f"Scanning decomposition trees for {len(chars):,} characters ({scope})...")
+    print(f"Scanning decomposition trees for {len(rows):,} characters ({scope})...")
     t0 = time.time()
 
     reachable_entities: set[str] = set()
@@ -98,17 +100,23 @@ def collect_reachable_entities(
                 norm = P.normalize_entity(token)
                 if norm.startswith("&"):
                     reachable_entities.add(norm)
-                else:
-                    return
         for child in node.get("children", []):
             _walk_tree(child)
 
-    for i, ch in enumerate(chars, 1):
+    for ch, apparent_ids, cjkvi_ids in rows:
         try:
             tree = P.decompose_character(ch, max_depth=6, compute_bbox=False)
             _walk_tree(tree)
         except Exception:
             pass
+
+        # Also collect entities from alternative representations (@apparent, cjkvi)
+        for alt_str in (apparent_ids, cjkvi_ids):
+            if alt_str:
+                for tok in re.findall(r"&[A-Za-z0-9_+-]+;", alt_str):
+                    norm = P.normalize_entity(tok)
+                    if norm.startswith("&"):
+                        reachable_entities.add(norm)
 
     print(
         f"  -> Found {len(reachable_entities):,} distinct reachable entities ({time.time() - t0:.2f}s)"

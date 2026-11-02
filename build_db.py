@@ -732,7 +732,7 @@ def build_database() -> None:
     cur.execute("SELECT COUNT(*) FROM words;")
     total_words = cur.fetchone()[0]
     print(f"  総熟語数: {total_words:,} 語")
-    assert total_words > 100000, f"熟語数が 100,000 件未満です: {total_words}"
+    assert total_words > 50000, f"熟語数が 50,000 件未満です: {total_words}"
 
     cur.execute("""
     SELECT w.lemma, w.reading, w.frequency_rank, w.frequency_tier

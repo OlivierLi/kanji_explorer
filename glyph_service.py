@@ -1122,11 +1122,21 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
 
     # 3. ローカルGlyphWikiキャッシュの確認
     slug = token_clean.strip("&;").lower()
-    cache_candidates = [
-        GLYPHWIKI_CACHE_DIR / f"{slug}.svg",
-    ]
+    norm_token = ids_parser.normalize_entity(token_clean)
+    norm_slug = norm_token.strip("&;").lower()
+
+    candidates: list[str] = [slug, norm_slug]
     if slug.startswith("i-"):
-        cache_candidates.append(GLYPHWIKI_CACHE_DIR / f"{slug[2:]}.svg")
+        candidates.append(slug[2:])
+    if norm_slug.startswith("i-"):
+        candidates.append(norm_slug[2:])
+
+    seen_slugs: set[str] = set()
+    cache_candidates = []
+    for s in candidates:
+        if s and s not in seen_slugs:
+            seen_slugs.add(s)
+            cache_candidates.append(GLYPHWIKI_CACHE_DIR / f"{s}.svg")
 
     for cache_path in cache_candidates:
         if cache_path.is_file():

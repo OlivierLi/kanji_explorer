@@ -131,6 +131,9 @@ def build_entity_map() -> tuple[dict[str, tuple[str, int, float]], dict[str, Cou
     review: dict[str, Counter[str]] = {}
 
     for ent in sorted(votes.keys()):
+        # Skip entities explicitly defined as compound sub-decompositions
+        if ent in ids_parser.COMPONENT_SUBDECOMPOSITIONS or ent in ids_parser.ATOMIC_SUBDECOMPOSITIONS:
+            continue
         c = votes[ent]
         top, top_cnt = sorted(c.items(), key=lambda item: (-item[1], item[0]))[0]
         total = sum(c.values())

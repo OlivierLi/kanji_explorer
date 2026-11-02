@@ -51,8 +51,10 @@ def _is_entity_resolved(entity: str) -> bool:
     return False
 
 
-def _collect_reachable_entities(chars: list[str]) -> set[str]:
-    """Find all entity references reachable from the given characters."""
+def _collect_reachable_entities(
+    char_rows: list[str] | list[tuple[str, ...]],
+) -> set[str]:
+    """Find all entity references reachable from the given characters across all IDS views."""
     reachable = set()
     ids_dict = P.get_ids_dict()
 
@@ -74,8 +76,23 @@ def _collect_reachable_entities(chars: list[str]) -> set[str]:
             elif tok not in P.IDC_INFO and tok != ch:
                 _walk(tok, seen, depth + 1)
 
-    for c in chars:
-        _walk(c, set())
+    for row in char_rows:
+        if isinstance(row, (tuple, list)):
+            ch = row[0]
+            alt_sources = row[1:]
+        else:
+            ch = row
+            alt_sources = ()
+
+        _walk(ch, set())
+        for alt_str in alt_sources:
+            if alt_str:
+                for tok in re.findall(r"&[A-Za-z0-9_+-]+;", alt_str):
+                    norm = P.normalize_entity(tok)
+                    if norm.startswith("&"):
+                        reachable.add(norm)
+                    _walk(norm, set())
+
     return reachable
 
 
@@ -91,13 +108,15 @@ class TestEntityCoverage:
         conn.close()
 
     def test_joyo_entity_coverage_zero_unresolved(self, db_conn):
-        """All 2,999 Jōyō/graded kanji must have 0 unresolved entities."""
+        """All 2,999 Jōyō/graded kanji must have 0 unresolved entities across all IDS views."""
         cur = db_conn.cursor()
-        cur.execute("SELECT char FROM characters WHERE grade IS NOT NULL")
-        joyo_chars = [r[0] for r in cur.fetchall()]
-        assert len(joyo_chars) >= 2000
+        cur.execute(
+            "SELECT char, apparent_ids, cjkvi_ids FROM characters WHERE grade IS NOT NULL"
+        )
+        joyo_rows = cur.fetchall()
+        assert len(joyo_rows) >= 2000
 
-        reachable = _collect_reachable_entities(joyo_chars)
+        reachable = _collect_reachable_entities(joyo_rows)
         unresolved = [e for e in sorted(reachable) if not _is_entity_resolved(e)]
 
         assert unresolved == [], (
@@ -109,11 +128,13 @@ class TestEntityCoverage:
     def test_basic_cjk_entity_coverage_ratchet(self, db_conn):
         """Basic CJK tier must only contain entities explicitly in the allowlist."""
         cur = db_conn.cursor()
-        cur.execute("SELECT char FROM characters WHERE tier = '基本漢字'")
-        basic_chars = [r[0] for r in cur.fetchall()]
-        assert len(basic_chars) >= 20000
+        cur.execute(
+            "SELECT char, apparent_ids, cjkvi_ids FROM characters WHERE tier = '基本漢字'"
+        )
+        basic_rows = cur.fetchall()
+        assert len(basic_rows) >= 20000
 
-        reachable = _collect_reachable_entities(basic_chars)
+        reachable = _collect_reachable_entities(basic_rows)
         unresolved = set(e for e in reachable if not _is_entity_resolved(e))
         allowlist = _load_allowlist()
 
