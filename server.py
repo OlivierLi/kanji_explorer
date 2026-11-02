@@ -1747,7 +1747,7 @@ def run_internal_self_tests() -> bool:
             find_data = json.loads(resp.read().decode("utf-8"))
             assert "results" in find_data
             assert find_data.get("total") == 8
-            assert find_data.get("direct_total") == 0
+            assert find_data.get("direct_total") == 1
             assert find_data.get("indirect_total") == 8
             results = find_data["results"]
             assert len(results) == 8
@@ -1769,12 +1769,12 @@ def run_internal_self_tests() -> bool:
         ) as resp:
             assert resp.status == 200
             find_direct = json.loads(resp.read().decode("utf-8"))
-            assert find_direct.get("direct_total") == 45
+            assert find_direct.get("direct_total") == 58
             assert find_direct.get("indirect_total") == 225
-            assert find_direct.get("total") == 45
+            assert find_direct.get("total") == 58
             assert len(find_direct.get("results", [])) > 0
             assert all(r.get("is_direct") == 1 for r in find_direct["results"])
-            print("✓ GET /api/ids-find?components=𭕄&hierarchy=direct: 正常(direct_total=45, indirect_total=225, 全件is_direct=1)")
+            print("✓ GET /api/ids-find?components=𭕄&hierarchy=direct: 正常(direct_total=58, indirect_total=225, 全件is_direct=1)")
 
         # 10. GET /api/ids-find?q=ほたる (読み検索検証)
         with urllib.request.urlopen(

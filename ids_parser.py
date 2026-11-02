@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -84,10 +85,12 @@ IDC_INFO: dict[str, dict[str, Any]] = {
 # 2. 組み込み構成要素および筆画分解定義 (COMPONENT_SUBDECOMPOSITIONS, STROKE_SUBDECOMPOSITIONS)
 # ==============================================================================
 
-# 単一Unicode文字に対応するCHISE実体参照の対応マップ
+# 単一Unicode文字に対応するCHISE実体参照の手動オーバーライドマップ.
+# 通常のエンティティ対応は scripts/build_entity_map.py および文字セットデコード規則で
+# 自動解決されるため、この辞書は意図的なオーバーライド（自動推論と意図的に食い違わせる場合や未解決のもの）
+# のみを保持します。
 CHISE_ENTITY_UNICODE_MAP: dict[str, str] = {
     "&CDP-8958;": "⺼",
-    "&GT-K00059;": "八",
     "&CDP-8B43;": "阝",
     "&CDP-8B7C;": "艮",
     "&GT-K01085;": "𠫓",
@@ -95,40 +98,51 @@ CHISE_ENTITY_UNICODE_MAP: dict[str, str] = {
     "&CDP-8964;": "𫠣",
     "&CDP-8CBB;": "𪜋",
     "&CDP-8968;": "𠂤",
-    "&JX2-7461;": "䍃",
     "&CDP-89D5;": "𠂊",
     "&CDP-8BD9;": "甲",
-    "&CDP-8BC0;": "冂",
     "&CDP-8BEA;": "刂",
-    "&CDP-895F;": "匕",
     "&CDP-895C;": "纟",
-    "&CDP-8DD8;": "𠂊",
     "&CDP-88C8;": "甘",
-    "&CDP-8AC0;": "㸒",
     "&CDP-8BD0;": "𠦂",
     "&CDP-8665;": "⺌",
-    "&CDP-8DEF;": "尣",
     "&CDP-8BF8;": "𠦝",
     "&HD-TK-01032130;": "𥃻",
-    "&MJ013489;": "曷",
-    "&GT-00154;": "𠂈",
     "&GT-K01770;": "𤰔",
-    "&CDP-8BE9;": "𡗗",
-    "&CDP-897D;": "丰",
-    "&CDP-89B6;": "丣",
-    "&CDP-8D41;": "𠂎",
-    "&JSP-457C;": "歰",
     "&CDP-8845;": "𡊮",
     "&CDP-8965;": "隹",
     "&CDP-8DE4;": "㇀",
-    "&CDP-8974;": "丁",
-    "&CDP-8C78;": "コ",
     "&CDP-89C8;": "𠃍",
-    "&CDP-89D7;": "卅",
-    "&CDP-88B6;": "丩",
     "&CDP-865E;": "月",
     "&GT-K00207;": "夂",
+    "&C4-2267;": "𢆶",
+    "&C4-2535;": "𠈌",
+    "&C5-2E51;": "𤔌",
+    "&MJ007273;": "八",
 }
+
+
+def _load_generated_entity_unicode_map() -> dict[str, str]:
+    """data/entity_unicode_map.tsv から自動生成されたエンティティ対応辞書を読み込む."""
+    tsv_path = Path(__file__).resolve().parent / "data" / "entity_unicode_map.tsv"
+    if not tsv_path.is_file():
+        return {}
+    mapping: dict[str, str] = {}
+    try:
+        with open(tsv_path, "r", encoding="utf-8") as f:
+            f.readline()  # header: entity\tunicode\tvotes\tshare
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    mapping[parts[0]] = parts[1]
+    except Exception:
+        return {}
+    return mapping
+
+
+GENERATED_ENTITY_UNICODE_MAP: dict[str, str] = _load_generated_entity_unicode_map()
 
 # 部品レベルの下位分解（漢字の構成要素として意味のある中間部品およびCHISE複合エンティティ）
 COMPONENT_SUBDECOMPOSITIONS: dict[str, str] = {
@@ -245,6 +259,21 @@ COMPONENT_SUBDECOMPOSITIONS: dict[str, str] = {
     "龍": "⿰𦚏&CDP-89B0;",
     "&CDP-89B0;": "⿱⿱一𠃑⿻乚三",
     "敢": "⿰⿱一耳攵",
+    "&GT-K00135;": "𫝀",
+    "&CDP-8BA4;": "⿹⿻戈𢆶",
+    "&CDP-8BB2;": "⿳十罒一",
+    "&GT-K02952;": "⿱十罒",
+    "&CDP-8D44;": "⿳士冖一",
+    "&GT-K01189;": "⿱士冖",
+    "&GT-K01666;": "⿱毌力",
+    "&CDP-89F4;": "⿻口人",
+    "&CDP-88BA;": "⿻口土",
+    "&CDP-89CC;": "⿲丨丨",
+    "&CDP-8CD4;": "⿱一自",
+    "&GT-K00880;": "⿱⺊冖",
+    "&CDP-8BBF;": "丂",
+    "&CDP-8D6B;": "业",
+    "&CDP-89B9;": "⿱刀口",
 }
 
 # 筆画レベルの下位分解（これ以上意味を持たない単一筆画への展開）
@@ -548,6 +577,10 @@ def load_equivalent_unified_ideographs(file_path: Path | str | None = None) -> N
         adj[ent].add(uni_char)
         adj[uni_char].add(ent)
 
+    for ent, uni_char in GENERATED_ENTITY_UNICODE_MAP.items():
+        adj[ent].add(uni_char)
+        adj[uni_char].add(ent)
+
     # 推移的閉包（連結成分）による双方向等価グループの構築
     visited: set[str] = set()
     equiv_groups: dict[str, list[str]] = {}
@@ -577,15 +610,60 @@ load_equivalent_unified_ideographs()
 # 4. CHISE エンティティおよび部品の正規化関数
 # ==============================================================================
 
+_RE_CDP_VARIANT = re.compile(r"^&CDP-i\d+-")
+_RE_CODESET = re.compile(r"^&(J90|J83|JX1|JX2|G0|K0)-([0-9A-Fa-f]{4});$")
+_RE_UNICODE_HEX_1 = re.compile(
+    r"^&(?:U-[iv]?\d*\+|hanaJU\+|(?:A-)?compU\+|(?:A-)?IWDSU\+|(?:A-)?cgnU\+|UU\+|U\+)([0-9A-Fa-f]+);$"
+)
+_RE_UNICODE_HEX_2 = re.compile(r"^&U-([0-9A-Fa-f]{4,8});$")
 
-def normalize_entity(entity: str) -> str:
+
+def _decode_codeset(entity: str) -> str | None:
+    """CHISE の coded-charset 実体参照（J90, J83, JX1, JX2, G0, K0）を Unicode にデコードする.
+
+    J78（コード交換）は意図的に変換対象外としています。
+    デコード結果が単一文字かつ私用領域（PUA）でない場合のみ採用します。
+    """
+    m = _RE_CODESET.match(entity)
+    if not m:
+        return None
+    cs, hx = m.group(1), m.group(2)
+    try:
+        b = bytes(int(hx[i : i + 2], 16) | 0x80 for i in (0, 2))
+    except ValueError:
+        return None
+    if cs in ("J90", "J83"):
+        codec = "euc_jp"
+    elif cs == "JX1":
+        codec = "euc_jis_2004"
+    elif cs == "JX2":
+        b = b"\x8f" + b
+        codec = "euc_jis_2004"
+    elif cs == "G0":
+        codec = "gb2312"
+    elif cs == "K0":
+        codec = "euc_kr"
+    else:
+        return None
+    try:
+        s = b.decode(codec)
+        if len(s) == 1 and unicodedata.category(s) != "Co":
+            return s
+    except Exception:
+        pass
+    return None
+
+
+def normalize_entity(entity: str, use_maps: bool = True) -> str:
     """CHISE IDS 内の XML 実体参照 (&...;) を正規化する.
 
-    - &I-CDP-XXXX; -> &CDP-XXXX; （&I-M-, &I-J90-, &I-C1- 等も同様に正規化）
-    - &o-UU+4343; -> 䍃 (U+4343) などの &o- プレフィックス除去およびUnicode Hex変換
+    - &o- プレフィックスの除去 (&o-UU+4343; -> &UU+4343;)
+    - &I- プレフィックスの正規化 (&I-CDP-XXXX; -> &CDP-XXXX; 等)
+    - &g2- プレフィックスの正規化 (&g2-MJ007273; -> &MJ007273; 等)
+    - &A- プレフィックスの正規化 (&A-U-i002+34BC; -> &U-i002+34BC;, &A-CDP-i001-88BA; -> &CDP-i001-88BA; 等)
     - &CDP-i001-8BD9; -> &CDP-8BD9; などの i001- プレフィックス除去
-    - CHISE_ENTITY_UNICODE_MAP に収録された単一文字対応エンティティの直接変換
-    - &U-i001+2FF1; などの 2FF0..2FFF は直接 IDC 演算子文字に変換
+    - 解決順序: 手動マップ (オーバーライド) -> 文字セットデコード -> 自動生成マップ -> Unicode Hex 正規表現
+    - use_maps=False の場合は手動および自動生成マップを無視し、純粋なルールベース正規化のみを適用します。
     """
     if not (entity.startswith("&") and entity.endswith(";")):
         return entity
@@ -598,22 +676,37 @@ def normalize_entity(entity: str) -> str:
     if entity.startswith("&I-"):
         entity = "&" + entity[3:]
 
-    # 3. i001- 等の異体字プレフィックス除去 (&CDP-i001-8BD9; -> &CDP-8BD9; 等)
-    entity = re.sub(r"^&CDP-i\d+-", "&CDP-", entity)
+    # 3. &g2- プレフィックスの正規化 (&g2-MJ007273; -> &MJ007273; 等)
+    if entity.startswith("&g2-"):
+        entity = "&" + entity[4:]
 
-    # 4. CHISE 単一 Unicode 文字対応マップ
-    if entity in CHISE_ENTITY_UNICODE_MAP:
+    # 4. &A- プレフィックスの正規化 (&A-compU+, &A-IWDSU+ 以外を除去)
+    if entity.startswith("&A-") and not entity.startswith(("&A-compU+", "&A-IWDSU+")):
+        entity = "&" + entity[3:]
+
+    # 5. i001- 等の異体字プレフィックス除去 (&CDP-i001-8BD9; -> &CDP-8BD9; 等)
+    entity = _RE_CDP_VARIANT.sub("&CDP-", entity)
+
+    # 6. CHISE 単一 Unicode 文字手動対応マップ（オーバーライド）
+    if use_maps and entity in CHISE_ENTITY_UNICODE_MAP:
         return CHISE_ENTITY_UNICODE_MAP[entity]
 
-    # 5. Unicode Hex 表記エンティティの変換
+    # 7. Coded-charset エンティティのデコード (&J90-XXXX;, &JX1-XXXX; 等)
+    if entity.startswith(("&J90-", "&J83-", "&JX1-", "&JX2-", "&G0-", "&K0-")):
+        decoded = _decode_codeset(entity)
+        if decoded is not None:
+            return decoded
+
+    # 8. 自動推論・生成対応マップ
+    if use_maps and entity in GENERATED_ENTITY_UNICODE_MAP:
+        return GENERATED_ENTITY_UNICODE_MAP[entity]
+
+    # 9. Unicode Hex 表記エンティティの変換
     # 例: &U-i001+2FF1;, &U-v002+5807;, &hanaJU+2E73F;, &A-compU+7530;, &A-IWDSU+7A74;, &UU+9F9C;, &U+5E7A;, &UU+4343;
-    m = re.match(
-        r"^&(?:U-[iv]?\d*\+|hanaJU\+|A-compU\+|A-IWDSU\+|UU\+|U\+)([0-9A-Fa-f]+);$",
-        entity,
-    )
+    m = _RE_UNICODE_HEX_1.match(entity)
     if not m:
         # 例: &U-00020006;, &U-20006;
-        m = re.match(r"^&U-([0-9A-Fa-f]{4,8});$", entity)
+        m = _RE_UNICODE_HEX_2.match(entity)
 
     if m:
         try:
@@ -1545,12 +1638,12 @@ def load_ids_dict(
 
     ids_dict: dict[str, str] = {}
 
-    # 1. CHISE IDS ファイル群の読み込み（IDS-UCS-*.txt, IDS-JIS-*.txt を優先）
+    # 1. CHISE IDS ファイル群（IDS-UCS-*.txt を最優先）
     if chise_dir.exists():
         ucs_files = sorted(glob.glob(str(chise_dir / "IDS-UCS-*.txt")))
         jis_files = sorted(glob.glob(str(chise_dir / "IDS-JIS-*.txt")))
         other_files = [p for p in glob.glob(str(chise_dir / "IDS-*.txt")) if p not in ucs_files and p not in jis_files]
-        for path in ucs_files + jis_files + other_files:
+        for path in ucs_files:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith(";;") or not line.strip():
@@ -1567,7 +1660,7 @@ def load_ids_dict(
                             if alt_key not in ids_dict:
                                 ids_dict[alt_key] = ids_val
 
-    # 2. CJKVI-IDS による補完（丸数字 \u2460-\u2473 を含む未符号化枝を除外）
+    # 2. CJKVI-IDS による標準文字分解の補完（丸数字 \u2460-\u2473 を含む未符号化枝を除外）
     if cjkvi_path.exists():
         with open(cjkvi_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -1589,7 +1682,26 @@ def load_ids_dict(
                         if char_tok not in ids_dict or re.search(r"[\u2460-\u2473]", ids_dict.get(char_tok, "")):
                             ids_dict[char_tok] = ids_val
 
-    # 3. COMPONENT_SUBDECOMPOSITIONS（特にCHISE複合エンティティや主要文字）の辞書への統合
+    # 3. CHISE JIS およびその他異体字ファイル群の読み込み（実体参照エンティティ等の補完）
+    if chise_dir.exists():
+        for path in jis_files + other_files:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith(";;") or not line.strip():
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 3:
+                        raw_char = parts[1].strip()
+                        char_tok = normalize_entity(raw_char)
+                        alt_key = f"&{parts[0].strip()};"
+                        ids_val = parts[2].split("\t")[0].strip()
+                        if ids_val and ids_val != raw_char and ids_val != alt_key:
+                            if char_tok not in ids_dict:
+                                ids_dict[char_tok] = ids_val
+                            if alt_key not in ids_dict:
+                                ids_dict[alt_key] = ids_val
+
+    # 4. COMPONENT_SUBDECOMPOSITIONS（特にCHISE複合エンティティや主要文字）の辞書への統合
     for k, v in COMPONENT_SUBDECOMPOSITIONS.items():
         ids_dict[k] = v
         norm_k = normalize_entity(k)
@@ -1896,7 +2008,7 @@ def main() -> None:
         ("&U-i001+5E7A;", "幺"),
         ("&I-CDP-89B2;", "&CDP-89B2;"),
         ("&I-M-02329;", "&M-02329;"),
-        ("&I-J90-3021;", "&J90-3021;"),
+        ("&I-J90-3021;", "亜"),
         ("&I-C1-2462;", "&C1-2462;"),
         ("&hanaJU+2E73F;", "𮜿"),
         ("&A-compU+7530;", "田"),

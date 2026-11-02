@@ -32,10 +32,11 @@ CODE_FILES = [
     "server.py", "wsgi.py", "glyph_service.py", "ids_parser.py",
     "jp_metadata.py", "view_renderer.py",
 ]
-RUNTIME_DIRS = ["static", "data/chise-ids"]
+RUNTIME_DIRS = ["static", "data/chise-ids", "data/glyphwiki_cache"]
 RUNTIME_DATA = [
     "data/kanji_explorer.db.gz", "data/kanjivg.xml.gz",
     "data/cjkvi-ids.txt", "data/EquivalentUnifiedIdeograph.txt",
+    "data/entity_unicode_map.tsv",
 ]
 SKIP_NAMES = {"__pycache__", ".DS_Store"}
 

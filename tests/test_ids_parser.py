@@ -37,16 +37,38 @@ class TestChiseNormalization:
         ("&U-i001+5E7A;", "幺"),
         ("&I-CDP-89B2;", "&CDP-89B2;"),
         ("&I-M-02329;", "&M-02329;"),
-        ("&I-J90-3021;", "&J90-3021;"),
+        ("&I-J90-3021;", "亜"),
         ("&I-C1-2462;", "&C1-2462;"),
         ("&o-UU+4343;", "䍃"),
         ("&hanaJU+2E73F;", "𮜿"),
         ("&A-compU+7530;", "田"),
         ("&A-IWDSU+7A74;", "穴"),
         ("漢字", "漢字"),  # エンティティを含まない一般文字列
+        # Coded-charset entities (J90, J83, JX1, JX2, G0, K0; J78 excluded)
+        ("&J90-3839;", "弦"),
+        ("&J83-3C59;", "邪"),
+        ("&JX1-7B41;", "藋"),
+        ("&JX2-7461;", "䍃"),
+        ("&G0-4630;", "瓢"),
+        ("&K0-7443;", "遷"),
+        ("&J78-4B29;", "&J78-4B29;"),
+        # Wrapper prefix stripping (A-, g2-)
+        ("&A-U-i002+34BC;", "㒼"),
+        ("&A-CDP-i001-88BA;", "&CDP-88BA;"),
+        ("&g2-UNKNOWN123;", "&UNKNOWN123;"),
+        ("&g2-MJ014823;", "止"),
+        ("&g2-MJ007273;", "八"),
+        # Generated map resolution
+        ("&AJ1-01904;", "玄"),
     ])
     def test_normalize_entity(self, entity, expected):
         assert ids_parser.normalize_entity(entity) == expected
+
+    def test_generated_map_aj1_01904(self):
+        # 手動オーバーライドマップから削除後も、自動生成マップ経由で玄に解決されること
+        assert ids_parser.normalize_entity("&AJ1-01904;") == "玄"
+        assert "&AJ1-01904;" not in ids_parser.CHISE_ENTITY_UNICODE_MAP
+        assert ids_parser.GENERATED_ENTITY_UNICODE_MAP.get("&AJ1-01904;") == "玄"
 
 
 class TestRadicalEquivalence:
@@ -226,3 +248,18 @@ class TestDecomposeCharacter:
         tree = ids_parser.decompose_character("U+86CD", max_depth=2, compute_bbox=True)
         assert tree["char"] == "蛍"
         assert tree["op"] == "⿱"
+
+    def test_decompose_aj1_01904_and_ken(self):
+        # &AJ1-01904; (玄) が正常に正規化・分解され、牽の構成要素木にも反映されること
+        assert ids_parser.normalize_entity("&AJ1-01904;") == "玄"
+        tree_aj1 = ids_parser.decompose_character("&AJ1-01904;", max_depth=2)
+        assert tree_aj1["char"] == "玄"
+        assert tree_aj1["type"] == "op"
+        assert any(c.get("char") == "幺" for c in tree_aj1.get("children", []))
+
+        tree_ken = ids_parser.decompose_character("牽", max_depth=3)
+        assert tree_ken["char"] == "牽"
+        cdp_node = next((c for c in tree_ken.get("children", []) if c.get("char") == "&CDP-89FE;"), None)
+        assert cdp_node is not None
+        assert any(c.get("char") == "玄" for c in cdp_node.get("children", []))
+

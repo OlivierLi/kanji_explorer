@@ -1,0 +1,11 @@
+# Entity coverage allowlist
+# This file tracks known unresolvable entity references in the Basic CJK tier.
+# It functions as a ratchet:
+#   1. New unresolvable entities CANNOT appear without failing CI.
+#   2. When an entity in this list becomes resolvable, the test FAILS until
+#      it is removed from this file.
+# Entities in the Jōyō/graded tier must NEVER be in this allowlist (0 allowed).
+
+&GT-K00132;
+&GT-K02140;
+&MCS-60012539;

@@ -27,6 +27,10 @@ data/*
 !data/EquivalentUnifiedIdeograph.txt
 !data/chise-ids/
 !data/chise-ids/**
+!data/entity_unicode_map.tsv
+!data/entity_unicode_review.tsv
+!data/glyphwiki_cache/
+!data/glyphwiki_cache/**
 
 # Screenshots, logs, and OS files
 Screenshot_*.png
