@@ -14,6 +14,7 @@ import urllib.parse
 
 import glyph_service
 import ids_parser
+import jp_metadata
 
 
 def _render_audit_card(
@@ -184,7 +185,8 @@ def render_side_by_side_html(
             )
         )
 
-    grade_text = f"小学{meta.get('grade')}年" if meta.get("grade") else (meta.get("tier") or "漢字")
+    grade_badges = jp_metadata.format_grade_jp(meta.get("grade"), None, None)
+    grade_text = " ／ ".join(grade_badges) or meta.get("tier") or "漢字"
     strokes_text = f"{meta.get('stroke_count')}画" if meta.get("stroke_count") else ""
     radical_text = meta.get("radical", "")
     on_text = " / ".join(meta.get("on_readings", [])) if meta.get("on_readings") else "-"

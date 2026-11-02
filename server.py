@@ -1208,7 +1208,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
 
             if conn is not None:
                 where_clauses = [
-                    "(c.ja_kun LIKE ? OR c.ja_kun LIKE ? OR c.ja_on LIKE ? OR c.ja_on LIKE ?)"
+                    "(REPLACE(REPLACE(c.ja_kun, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_kun, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_on, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_on, '.', ''), '-', '') LIKE ?)"
                 ]
                 sql_params: list[Any] = [
                     f"%{term_hira}%",
@@ -1328,11 +1328,12 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                     query_where_clauses = list(base_where_clauses)
                     query_where_params = list(base_where_params)
 
+                    having_sql = ""
                     if mode == "direct":
-                        query_where_clauses.append("cc_main.is_direct = 1")
+                        having_sql = "HAVING MAX(cc_main.is_direct) = 1"
                         total = direct_total
                     elif mode in ("indirect", "transitive"):
-                        query_where_clauses.append("cc_main.is_direct = 0")
+                        having_sql = "HAVING MAX(cc_main.is_direct) = 0"
                         total = indirect_total
                     else:
                         total = base_total
@@ -1351,6 +1352,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                         JOIN component_closure cc_main ON cc_main.target_char = c.char AND cc_main.component IN ({primary_ph})
                         WHERE {query_where_sql}
                         GROUP BY c.char
+                        {having_sql}
                         ORDER BY
                             COALESCE(c.freq, 999999) ASC,
                             CASE WHEN c.grade IS NOT NULL THEN c.grade ELSE 999 END ASC,

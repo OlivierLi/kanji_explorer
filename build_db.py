@@ -297,6 +297,60 @@ def parse_unihan() -> dict[str, dict[str, Any]]:
 # 5. データベーステーブル構築およびインデックス生成
 # ==============================================================================
 
+def romanized_reading_to_kana(reading: str) -> str:
+    """Unihan の日本語ローマ字読みを仮名に変換する（長母音は保持）。"""
+    basic = {
+        "": "あいうえお", "k": "かきくけこ", "g": "がぎぐげご",
+        "s": "さしすせそ", "z": "ざじずぜぞ", "t": "たちつてと",
+        "d": "だぢづでど", "n": "なにぬねの", "h": "はひふへほ",
+        "b": "ばびぶべぼ", "p": "ぱぴぷぺぽ", "m": "まみむめも",
+        "r": "らりるれろ",
+    }
+    syllables = {c + v: kana for c, row in basic.items() for v, kana in zip("aiueo", row)}
+    syllables.update({"shi": "し", "chi": "ち", "tsu": "つ", "fu": "ふ", "fi": "ふぃ", "ji": "じ",
+                      "ya": "や", "yu": "ゆ", "yo": "よ", "wa": "わ", "wo": "を", "wi": "ゐ", "we": "ゑ"})
+    for c, stem in {"ky": "き", "gy": "ぎ", "sh": "し", "shy": "し", "chy": "ち", "sy": "し", "zy": "じ", "j": "じ", "ty": "ち", "ch": "ち", "dy": "ぢ", "ny": "に", "hy": "ひ", "by": "び", "py": "ぴ", "my": "み", "ry": "り"}.items():
+        for vowel, small in zip("auo", "ゃゅょ"):
+            syllables[c + vowel] = stem + small
+    text = reading.lower()
+    result = ""
+    while text:
+        if len(text) > 1 and text[0] == text[1] and text[0] not in "aeioun":
+            result += "っ"
+            text = text[1:]
+            continue
+        for size in (4, 3, 2, 1):
+            if text[:size] in syllables:
+                result += syllables[text[:size]]
+                text = text[size:]
+                break
+        else:
+            if text[0] == "n":
+                result += "ん"
+                text = text[2:] if text.startswith("n'") else text[1:]
+            else:
+                raise ValueError(f"未対応の日本語ローマ字読み: {reading}")
+    return result
+
+
+def unihan_kana_readings(entry: dict[str, Any]) -> tuple[str | None, str | None]:
+    """仮名資料を優先し、旧ローマ字資料の追加読みも失わず統合する。"""
+    on, kun = [], []
+    for token in entry.get("kJapanese", "").split():
+        if re.search(r"[\u30A0-\u30FF]", token):
+            on.append(token)
+        elif re.search(r"[\u3040-\u309F]", token):
+            kun.append(token)
+    for key, dest, katakana in (("kJapaneseOn", on, True), ("kJapaneseKun", kun, False)):
+        for token in entry.get(key, "").split():
+            kana = romanized_reading_to_kana(token) if re.search(r"[A-Za-z]", token) else token
+            if katakana:
+                kana = "".join(chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in kana)
+            if kana not in dest:
+                dest.append(kana)
+    return (", ".join(on) or None, ", ".join(kun) or None)
+
+
 def build_database() -> None:
     """全データソースをマージして SQLite データベース kanji_explorer.db を構築する."""
     start_time = time.time()
@@ -383,23 +437,7 @@ def build_database() -> None:
 
         # 読み仮名のフォールバック (KANJIDIC2 にない場合)
         if not ja_on and not ja_kun:
-            on_list: list[str] = []
-            kun_list: list[str] = []
-            if "kJapaneseOn" in u_entry:
-                on_list.extend(u_entry["kJapaneseOn"].split())
-            if "kJapaneseKun" in u_entry:
-                kun_list.extend(u_entry["kJapaneseKun"].split())
-            if not on_list and not kun_list and "kJapanese" in u_entry:
-                for token in u_entry["kJapanese"].split():
-                    # カタカナを含む場合は音読み、ひらがなを含む場合は訓読み
-                    if re.search(r"[\u30A0-\u30FF]", token):
-                        on_list.append(token)
-                    elif re.search(r"[\u3040-\u309F]", token):
-                        kun_list.append(token)
-            if on_list:
-                ja_on = ", ".join(on_list)
-            if kun_list:
-                ja_kun = ", ".join(kun_list)
+            ja_on, ja_kun = unihan_kana_readings(u_entry)
 
         cangjie = u_entry.get("cangjie")
         moji_joho = u_entry.get("moji_joho")

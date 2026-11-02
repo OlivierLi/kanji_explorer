@@ -967,6 +967,55 @@ def _assign_ink_islands_to_tree(
     for c_idx, child in enumerate(children):
         _assign_ink_islands_to_tree(child, child_assignments[c_idx], next_shared_ids, parent_op=op)
 
+    # 日・目の横画は、上下の穴を隔てるインクだけを所有する。
+    # 理論矩形では接続した縦枠まで拾うため、同じ島の穴から切り分ける。
+    if (op == "⿴" and len(children) == 2
+            and (children[0].get("char") or children[0].get("raw_char")) in ("口", "囗")
+            and (children[1].get("char") or children[1].get("raw_char")) in ("一", "二")):
+        count = 2 if children[1].get("char") == "二" else 1
+        bx, by, bw, bh = tree_node["bbox"]
+        for island in islands:
+            holes = sorted([h for h in island.get("hole_boxes", [])
+                            if bx <= (h[0] + h[2]) / 2 <= bx + bw
+                            and by <= (h[1] + h[3]) / 2 <= by + bh], key=lambda h: h[1])
+            if len(holes) != count + 1:
+                continue
+            left = max(h[0] for h in holes)
+            right = min(h[2] for h in holes)
+            if tree_node.get("_has_shared_island"):
+                left, right = max(bx, left), min(bx + bw, right)
+                if holes[0][3] < by or holes[-1][1] > by + bh:
+                    continue
+            if right <= left or any(a[3] >= b[1] for a, b in zip(holes, holes[1:])):
+                continue
+            bars = [[left, a[3], right - left, b[1] - a[3]]
+                    for a, b in zip(holes, holes[1:])]
+            inner = children[1]
+            inner["clip_rects"] = bars
+            inner["hit_rects"] = bars
+            inner["bbox"] = [left, bars[0][1], right - left,
+                             bars[-1][1] + bars[-1][3] - bars[0][1]]
+            if len(inner.get("children", [])) == count:
+                for child, bar in zip(inner["children"], bars):
+                    child["bbox"] = list(bar)
+                    child["clip_rects"] = [list(bar)]
+                    child["hit_rects"] = [list(bar)]
+            # 補集合を枠へ与え、横画を除いても縦枠と上下辺を保持する。
+            x1, y1, x2, y2 = island["x1"], island["y1"], island["x2"], island["y2"]
+            if tree_node.get("_has_shared_island"):
+                x1, y1 = max(bx, x1), max(by, y1)
+                x2, y2 = min(bx + bw, x2), min(by + bh, y2)
+            frame = [[x1, y1, left - x1, y2 - y1],
+                     [right, y1, x2 - right, y2 - y1]]
+            start = y1
+            for bar in bars:
+                frame.append([left, start, right - left, bar[1] - start])
+                start = bar[1] + bar[3]
+            frame.append([left, start, right - left, y2 - start])
+            children[0]["clip_rects"] = frame
+            children[0]["hit_rects"] = frame
+            break
+
     if (
         len(children) == 2
         and (children[0].get("char") in ("口", "囗") or children[0].get("raw_char") in ("口", "囗"))
@@ -2673,12 +2722,22 @@ def _allocate_strokes_recursive(
     is_sequential = node_op in ("⿱", "⿰", "⿳", "⿲") or node_op is None or lc in PRIMITIVE_STROKES
 
     if is_sequential and total_expected == len(p_strokes):
+        # 同じ部品が並ぶ場合、片側だけのKanjiVG記号を先の子が
+        # 取得することがある。筆順の位置と照合してから未割当を埋める。
+        symbols = [_get_equivalent_symbols(c.get("char") or c.get("raw_char") or "")
+                   for c in ch_nodes]
+        repeated = len(symbols) > 1 and bool(set.intersection(*symbols))
         offset = 0
         for i, (c_node, count) in enumerate(zip(ch_nodes, expected_counts)):
             child_p = f"{lp}.{i}" if lp != "0" else f"0.{i}"
             c_slice = p_strokes[offset : offset + count]
             offset += count
-            if not layer_strokes.get(child_p):
+            if repeated and layer_strokes.get(child_p) != c_slice:
+                for descendant in list(layer_strokes):
+                    if descendant.startswith(child_p + "."):
+                        del layer_strokes[descendant]
+                layer_strokes[child_p] = c_slice
+            elif not layer_strokes.get(child_p):
                 layer_strokes[child_p] = c_slice
             _allocate_strokes_recursive(child_p, c_node, layer_strokes[child_p], layer_strokes)
     else:

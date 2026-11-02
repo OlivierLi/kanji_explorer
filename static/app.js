@@ -5,7 +5,7 @@
  */
 
 // =============================================================================
-// 1. 定数およびフォールバック用組込データ
+// 1. 定数
 // =============================================================================
 
 // IDC 演算子日本語メタデータ
@@ -28,304 +28,13 @@ const IDC_OPERATORS = {
   "⿿": { name: "回転", short: "回転", parts: ["回転対象"] }
 };
 
-// プリセット用高精度フォールバックデータ（サーバー未起動・オフライン検証対応）
-const DEMO_PRESETS_DATA = {
-  "蛍": {
-    meta: {
-      literal: "蛍",
-      codepoint: "U+86CD",
-      block_name: "CJK統合漢字（基本多言語面）",
-      tier: "基本漢字",
-      stroke_count: 11,
-      radical: "虫(むし・むしへん) [142]",
-      on_readings: ["ケイ"],
-      kun_readings: ["ほたる"],
-      nanori: [],
-      grade: 4,
-      jlpt: 2,
-      freq: 1200,
-      badges: ["教育漢字(小学4年)", "常用漢字", "新聞頻度 #1200", "旧JLPT 2級"],
-      daikanwa: "33140",
-      four_corner: "9013.6",
-      skip: "2-2-9",
-      cangjie: "FBLMI",
-      mojijoho: "MJ022987",
-      equivalents: [{ char: "螢", codepoint: "U+87A2", label: "旧字体" }]
-    },
-    alternatives: [
-      { source: "CHISE標準構造", ids: "⿱𰃮虫" },
-      { source: "CJKVI構造", ids: "⿳𭕄冖虫" }
-    ],
-    tree: {
-      type: "op",
-      op: "⿱",
-      char: "蛍",
-      path: "0",
-      role_label: "全体",
-      bbox: [0.0, 0.0, 1.0, 1.0],
-      children: [
-        {
-          type: "op",
-          op: "⿱",
-          char: "𰃮",
-          codepoint: "U+300EE",
-          tier: "拡張G",
-          path: "0.0",
-          role_label: "上",
-          bbox: [0.0, 0.0, 1.0, 0.45],
-          children: [
-            {
-              type: "op",
-              op: "⿲",
-              char: "𭕄",
-              raw_char: "⺍",
-              codepoint: "U+2D544",
-              tier: "拡張F",
-              path: "0.0.0",
-              role_label: "上",
-              bbox: [0.15, 0.0, 0.7, 0.22],
-              children: [
-                { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.0.0.0", role_label: "左", bbox: [0.15, 0.0, 0.23, 0.22] },
-                { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.0.0.1", role_label: "中", bbox: [0.38, 0.0, 0.24, 0.22] },
-                { type: "char", char: "丿", codepoint: "U+4E3F", tier: "部首・筆画", path: "0.0.0.2", role_label: "右", bbox: [0.62, 0.0, 0.23, 0.22] }
-              ]
-            },
-            {
-              type: "char",
-              char: "冖",
-              codepoint: "U+5196",
-              tier: "基本漢字",
-              path: "0.0.1",
-              role_label: "下",
-              bbox: [0.05, 0.22, 0.9, 0.23]
-            }
-          ]
-        },
-        {
-          type: "op",
-          op: "⿱",
-          char: "虫",
-          codepoint: "U+866B",
-          tier: "基本漢字",
-          path: "0.1",
-          role_label: "下",
-          bbox: [0.1, 0.45, 0.8, 0.55],
-          children: [
-            { type: "char", char: "中", codepoint: "U+4E2D", tier: "基本漢字", path: "0.1.0", role_label: "上", bbox: [0.15, 0.45, 0.7, 0.35] },
-            { type: "char", char: "一", codepoint: "U+4E00", tier: "基本漢字", path: "0.1.1", role_label: "下", bbox: [0.1, 0.8, 0.8, 0.2] }
-          ]
-        }
-      ]
-    },
-    visual: {
-      has_kanjivg: true,
-      interactive_svg: {
-        base_path: "M841 4 826 31 811 56 803 68 755 56 689 41 622 28 553 16 482 5 411 -5 338 -15 264 -23 188 -31 132 -35 122 -53 110 -37 96 26 107 27 183 31 259 35 333 39 406 45 477 51H480V257H263V192L199 160V510L263 477H480V596L544 585L560 575L544 565V477H760L793 504L852 456L825 434V257L760 225V257H544V56H547L617 63L685 70L751 76L795 80L793 82L773 107L752 131L729 155L704 179L677 203L682 211L715 196L746 177L775 158L802 135L828 112L851 87L872 60L891 32L908 3L924 -28L923 -53L906 -70L881 -69L864 -52L853 -24ZM263 456V278H480V456ZM544 456V278H760V456ZM47 477 42 501 55 522 66 529 77 539 87 551 96 567 105 587 113 609 120 634 127 663 132 695 136 730H146L151 695L153 670H653L667 690L686 717L702 741L718 764L733 785L746 805L758 824L767 840L776 856L780 865L785 874L838 836L846 819H824L814 807L800 791L785 775L767 757L749 738L728 719L706 698L681 677L672 670H899L902 672V674H903L931 697L990 648L964 632L945 624L940 619L930 605L918 591L906 576L892 561L878 545L862 528L845 512L828 494L820 499L832 521L842 542L852 563L861 582L871 600L879 617L886 633L892 647L893 648H154V630L152 601L148 574L142 549L134 526L122 505L109 486L92 469L68 464ZM286 739 280 752 274 764 265 777 256 791 245 804 232 818 218 833 202 846 207 854 227 845 245 837 263 827 280 817 295 806 309 794 322 781 334 767 344 752 353 737 352 712 335 695 310 696 293 714 290 726ZM497 755 493 770 487 784 479 798 471 812 461 827 450 842 437 857 422 871 428 878 446 869 465 860 481 849 497 837 512 824 525 810 537 795 548 779 558 762 565 745 562 720 543 705 518 708 503 727 501 741Z",
-        component_layers: [
-          { path: "0.0", char: "𰃮", depth: 1, role_label: "上", bbox: [0.0, 0.0, 1.0, 0.5] },
-          { path: "0.0.0", char: "𭕄", depth: 2, role_label: "上", bbox: [0.0, 0.0, 1.0, 0.25] },
-          { path: "0.0.1", char: "冖", depth: 2, role_label: "下", bbox: [0.0, 0.25, 1.0, 0.25] },
-          { path: "0.1", char: "虫", depth: 1, role_label: "下", bbox: [0.0, 0.5, 1.0, 0.5] },
-          { path: "0.1.0", char: "中", depth: 2, role_label: "上", bbox: [0.0, 0.5, 1.0, 0.25] },
-          { path: "0.1.0.0", char: "口", depth: 3, role_label: "外囲", bbox: [0.0, 0.5, 1.0, 0.25] },
-          { path: "0.1.0.1", char: "丨", depth: 3, role_label: "内側", bbox: [0.12, 0.53, 0.76, 0.19] },
-          { path: "0.1.1", char: "𠃌", depth: 2, role_label: "下", bbox: [0.0, 0.75, 1.0, 0.25] }
-        ]
-      },
-      kanjivg_svg: `
-        <svg viewBox="0 0 109 109" class="kvg-root">
-          <g id="kvg:086cd" kvg:element="蛍">
-            <g id="kvg:086cd-g1" kvg:element="𰃮" kvg:position="top" data-path="0.0">
-              <g id="kvg:086cd-g2" kvg:element="𭕄" kvg:original="⺍" data-path="0.0.0">
-                <path id="kvg:086cd-s1" class="kvg-stroke" kvg:type="㇔" d="M31.25,12.75c3.27,2.35,6.77,6.48,7.94,9.69"/>
-                <path id="kvg:086cd-s2" class="kvg-stroke" kvg:type="㇔" d="M52.75,9.75c2.47,1.88,6.88,6.38,7.72,9.69"/>
-                <path id="kvg:086cd-s3" class="kvg-stroke" kvg:type="㇒" d="M78.49,11.23c0.41,0.85,0.22,1.96-0.34,2.95c-1.4,2.44-4.65,6.57-7.9,9.57"/>
-              </g>
-              <g id="kvg:086cd-g3" kvg:element="冖" data-path="0.0.1">
-                <path id="kvg:086cd-s4" class="kvg-stroke" kvg:type="㇔" d="M19.75,27.5c0,3.43-3.21,12.87-4.67,15.16"/>
-                <path id="kvg:086cd-s5" class="kvg-stroke" kvg:type="㇖b" d="M21.24,30.34c11.76-1.59,57.19-5.71,66.36-6.15c9.65-0.45,1.94,6.78-0.34,8.56"/>
-              </g>
-            </g>
-            <g id="kvg:086cd-g4" kvg:element="虫" kvg:position="bottom" data-path="0.1">
-              <g id="kvg:086cd-g5" kvg:element="中" data-path="0.1.0">
-                <g id="kvg:086cd-g6" kvg:element="口" data-path="0.1.0.0">
-                  <path id="kvg:086cd-s6" class="kvg-stroke" kvg:type="㇑" d="M30.75,44.42c0.59,0.5,1.33,1.38,1.48,2.03c1.27,5.55,2.42,12.01,3.48,19.26"/>
-                  <path id="kvg:086cd-s7" class="kvg-stroke" kvg:type="㇕b" d="M33.22,46.17c9.53-1.04,36.56-4.57,43.43-4.96c2.68-0.15,3.85,1.54,3.22,3.87c-1.62,6-2.62,9.67-4.58,16.48"/>
-                  <path id="kvg:086cd-s8" class="kvg-stroke" kvg:type="㇐b" d="M36.17,63.95c9.21-0.82,29.96-2.82,41.45-3.66"/>
-                </g>
-                <g id="kvg:086cd-g7" kvg:element="丨" data-path="0.1.0.1">
-                  <path id="kvg:086cd-s9" class="kvg-stroke" kvg:type="㇑a" d="M52.92,34.25c1.08,1.08,1.46,2.38,1.46,3.94c0,5.06-0.13,38.56-0.13,50.31"/>
-                </g>
-              </g>
-              <path id="kvg:086cd-s10" class="kvg-stroke" kvg:type="㇀" d="M25.75,82.58c1.38,1.17,3.15,1.43,4.64,0.73c7.86-3.69,38.86-18.06,47.86-22.31" data-path="0.1.1"/>
-              <path id="kvg:086cd-s11" class="kvg-stroke" kvg:type="㇔" d="M72.25,69.75c5.38,3.95,13.9,16.24,15.25,22.38" data-path="0.1.2"/>
-            </g>
-          </g>
-        </svg>
-      `
-    }
-  },
-  "𰃮": {
-    meta: {
-      literal: "𰃮",
-      codepoint: "U+300EE",
-      block_name: "CJK統合漢字拡張G",
-      tier: "拡張G",
-      stroke_count: 5,
-      radical: "冖(わかんむり) [14]",
-      on_readings: [],
-      kun_readings: [],
-      nanori: [],
-      grade: null,
-      jlpt: null,
-      freq: null,
-      badges: ["拡張G", "構成部品"],
-      daikanwa: "-",
-      four_corner: "-",
-      skip: "2-3-2",
-      cangjie: "FB",
-      mojijoho: "-",
-      equivalents: [{ char: "⺍", codepoint: "U+2E8D", label: "冠部首" }]
-    },
-    alternatives: [
-      { source: "CHISE標準構造", ids: "⿱𭕄冖" }
-    ],
-    tree: {
-      type: "op",
-      op: "⿱",
-      char: "𰃮",
-      path: "0",
-      role_label: "全体",
-      bbox: [0.0, 0.0, 1.0, 1.0],
-      children: [
-        {
-          type: "op",
-          op: "⿲",
-          char: "𭕄",
-          raw_char: "⺍",
-          codepoint: "U+2D544",
-          tier: "拡張F",
-          path: "0.0",
-          role_label: "上",
-          bbox: [0.15, 0.05, 0.7, 0.45],
-          children: [
-            { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.0.0", role_label: "左", bbox: [0.15, 0.05, 0.23, 0.45] },
-            { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.0.1", role_label: "中", bbox: [0.38, 0.05, 0.24, 0.45] },
-            { type: "char", char: "丿", codepoint: "U+4E3F", tier: "部首・筆画", path: "0.0.2", role_label: "右", bbox: [0.62, 0.05, 0.23, 0.45] }
-          ]
-        },
-        {
-          type: "char",
-          char: "冖",
-          codepoint: "U+5196",
-          tier: "基本漢字",
-          path: "0.1",
-          role_label: "下",
-          bbox: [0.05, 0.55, 0.9, 0.4]
-        }
-      ]
-    },
-    visual: {
-      has_kanjivg: false,
-      interactive_svg: {
-        base_path: "M42 225 36 248 47 270 58 279 69 291 80 306 90 326 99 349 107 375 114 405 120 439 125 476 131 517H141L146 476L148 445H647L661 469L679 499L696 527L712 553L727 577L739 599L751 620L770 657L774 668L779 678L833 643L843 626L821 625L810 609L796 591L781 571L764 551L745 528L724 505L702 481L677 456L665 445H894L896 447V448H897L926 472L985 424L958 408L942 401L936 391L925 376L914 359L901 341L888 324L873 305L857 285L840 265L822 244L814 249L825 274L836 298L846 321L855 342L864 363L872 382L879 401L886 417L888 424H149V402L147 368L143 338L137 309L129 283L118 260L104 239L88 220L64 213ZM280 528 274 544 267 559 259 574 249 589 238 604 225 619 212 635 196 650 202 658 222 648 241 638 259 626 276 614 291 600 306 585 318 570 330 554 341 537 349 518 347 494 329 477 304 480 288 498 285 513ZM492 547 487 564 480 581 473 597 464 613 454 630 443 646 431 663 416 679 422 687 441 675 460 664 477 650 493 636 508 621 521 604 533 587 544 568 553 548 561 528 557 504 537 489 513 493 498 513 495 530Z",
-        component_layers: [
-          {
-            path: "0.0",
-            char: "𭕄",
-            depth: 1,
-            role_label: "上",
-            bbox: [0.15, 0.05, 0.7, 0.45],
-            svg_path: "M250,200 Q280,260 300,340 M500,160 Q520,240 530,340 M780,180 Q730,260 670,340",
-            svg_transform: ""
-          },
-          {
-            path: "0.1",
-            char: "冖",
-            depth: 1,
-            role_label: "下",
-            bbox: [0.05, 0.55, 0.9, 0.4],
-            svg_path: "M150,550 L120,750 M140,580 L880,580 L850,750",
-            svg_transform: ""
-          }
-        ]
-      }
-    }
-  },
-  "𭕄": {
-    meta: {
-      literal: "𭕄",
-      codepoint: "U+2D544",
-      block_name: "CJK統合漢字拡張F",
-      tier: "拡張F",
-      stroke_count: 3,
-      radical: "小(しょう・しょうがしら) [42]",
-      on_readings: [],
-      kun_readings: [],
-      nanori: [],
-      grade: null,
-      jlpt: null,
-      freq: null,
-      badges: ["拡張F", "末端基礎部品", "つかんむり原字"],
-      daikanwa: "-",
-      four_corner: "-",
-      skip: "1-1-1",
-      cangjie: "FF",
-      mojijoho: "-",
-      equivalents: [{ char: "⺍", codepoint: "U+2E8D", label: "CJK部首補助" }]
-    },
-    alternatives: [
-      { source: "CHISE標準構造", ids: "⿲丶丶丿" }
-    ],
-    tree: {
-      type: "op",
-      op: "⿲",
-      char: "𭕄",
-      path: "0",
-      role_label: "全体",
-      bbox: [0.0, 0.0, 1.0, 1.0],
-      children: [
-        { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.0", role_label: "左", bbox: [0.1, 0.2, 0.25, 0.6] },
-        { type: "char", char: "丶", codepoint: "U+4E36", tier: "部首・筆画", path: "0.1", role_label: "中", bbox: [0.38, 0.15, 0.24, 0.7] },
-        { type: "char", char: "丿", codepoint: "U+4E3F", tier: "部首・筆画", path: "0.2", role_label: "右", bbox: [0.65, 0.2, 0.25, 0.6] }
-      ]
-    },
-    visual: {
-      has_kanjivg: false,
-      interactive_svg: {
-        base_path: "M855 538 865 520 844 519 839 510 822 481 804 452 787 422 768 391 749 359 729 327 707 294 685 261 661 227 653 232 667 270 682 308 697 344 713 378 728 412 742 445 757 477 771 508 785 538 796 562H795L801 573ZM237 333 229 361 220 387 210 413 200 437 189 461 177 483 165 506 152 528 159 535 180 519 200 501 218 480 235 457 251 433 266 408 279 381 292 352 303 322 313 290 309 266 290 251 266 255 251 275 244 305ZM478 361 471 385 464 409 455 433 435 483 423 508 411 534 398 561 406 567 428 546 447 524 465 501 481 477 496 453 509 428 522 404 532 378 542 353 550 327 546 303 526 289 502 293 487 313 483 337Z",
-        component_layers: [
-          { path: "0.0", char: "丶", depth: 1, role_label: "左", bbox: [0.1, 0.2, 0.25, 0.6], svg_path: "M250,280 Q290,420 330,600", svg_transform: "" },
-          { path: "0.1", char: "丶", depth: 1, role_label: "中", bbox: [0.38, 0.15, 0.24, 0.7], svg_path: "M500,200 Q520,400 540,650", svg_transform: "" },
-          { path: "0.2", char: "丿", depth: 1, role_label: "右", bbox: [0.65, 0.2, 0.25, 0.6], svg_path: "M800,260 Q720,450 630,650", svg_transform: "" }
-        ]
-      }
-    }
-  }
-};
-
-// 逆引き検索用の組込データ（蛍・𰃮・𭕄に関連する包含漢字）
-const DEMO_FIND_DATABASE = [
-  { literal: "学", codepoint: "U+5B66", tier: "小学校1年", grade: 1, freq: 63, stroke_count: 8, ids: "⿱𰃮子", is_direct: 1, path: "0.0", via: "", readings: "ガク / まなぶ", components: ["𰃮", "子", "𭕄", "冖", "丶", "丿", "了", "一"] },
-  { literal: "挙", codepoint: "U+6319", tier: "小学校4年", grade: 4, freq: 257, stroke_count: 10, ids: "⿱𰃮手", is_direct: 1, path: "0.0", via: "", readings: "キョ / あげる", components: ["𰃮", "手", "𭕄", "冖"] },
-  { literal: "労", codepoint: "U+52B4", tier: "小学校4年", grade: 4, freq: 398, stroke_count: 7, ids: "⿱𰃮力", is_direct: 1, path: "0.0", via: "", readings: "ロウ", components: ["𰃮", "力", "𭕄", "冖"] },
-  { literal: "脳", codepoint: "U+8133", tier: "小学校6年", grade: 6, freq: 459, stroke_count: 11, ids: "⿰月⿱𰃮凶", is_direct: 0, path: "0.1.0", via: "𰃮", readings: "ノウ", components: ["月", "𰃮", "凶", "𭕄", "冖"] },
-  { literal: "単", codepoint: "U+5358", tier: "小学校4年", grade: 4, freq: 586, stroke_count: 9, ids: "⿱𰃮甲", is_direct: 1, path: "0.0", via: "", readings: "タン / ひとえ", components: ["𰃮", "甲", "𭕄", "冖", "田", "丨"] },
-  { literal: "厳", codepoint: "U+53B3", tier: "小学校6年", grade: 6, freq: 638, stroke_count: 17, ids: "⿱𰃮敢", is_direct: 1, path: "0.0", via: "", readings: "ゲン・ゴン / きびしい", components: ["𰃮", "敢", "𭕄", "冖"] },
-  { literal: "覚", codepoint: "U+899A", tier: "小学校4年", grade: 4, freq: 710, stroke_count: 12, ids: "⿱𰃮見", is_direct: 1, path: "0.0", via: "", readings: "カク / おぼえる・さめる", components: ["𰃮", "見", "𭕄", "冖", "目", "儿"] },
-  { literal: "栄", codepoint: "U+6804", tier: "小学校4年", grade: 4, freq: 920, stroke_count: 9, ids: "⿱𰃮木", is_direct: 1, path: "0.0", via: "", readings: "エイ / さかえる", components: ["𰃮", "木", "𭕄", "冖", "丶", "丿", "十", "八"] },
-  { literal: "誉", codepoint: "U+8A89", tier: "中学校", grade: 8, freq: 1064, stroke_count: 13, ids: "⿱𰃮言", is_direct: 1, path: "0.0", via: "", readings: "ヨ / ほまれ", components: ["𰃮", "言", "𭕄", "冖", "口"] },
-  { literal: "巣", codepoint: "U+5DE3", tier: "小学校4年", grade: 4, freq: 1588, stroke_count: 11, ids: "⿱𰃮果", is_direct: 1, path: "0.0", via: "", readings: "ソウ / す", components: ["𰃮", "果", "𭕄", "冖", "日", "木"] },
-  { literal: "獣", codepoint: "U+7363", tier: "中学校", grade: 8, freq: 1714, stroke_count: 16, ids: "⿰⿱𰃮田犬", is_direct: 0, path: "0.0.0", via: "𰃮", readings: "ジュウ / けもの", components: ["𰃮", "田", "犬", "𭕄", "冖"] },
-  { literal: "蛍", codepoint: "U+86CD", tier: "常用漢字", grade: 8, freq: 2031, stroke_count: 11, ids: "⿱𰃮虫", is_direct: 1, path: "0.0", via: "", readings: "ケイ / ほたる", components: ["𰃮", "虫", "𭕄", "冖", "丶", "丿", "中", "口", "丨", "一"] },
-  { literal: "螢", codepoint: "U+87A2", tier: "旧字体・人名", grade: null, freq: 9999, stroke_count: 16, ids: "⿱⿳𤇾冖虫", is_direct: 0, path: "0.0.1", via: "虫", readings: "ケイ / ほたる", components: ["虫", "冖", "火"] }
-];
-
 // =============================================================================
 // 2. アプリケーション状態管理
 // =============================================================================
 
 const state = {
+  charRequestGeneration: 0,
+  findRequestGeneration: 0,
   currentChar: "中",
   history: ["中"],
   historyIndex: 0,
@@ -430,6 +139,8 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   const token = charOrToken.trim();
   if (!token) return;
 
+  const requestGeneration = ++state.charRequestGeneration;
+
   const idcRegex = /^[⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿]/;
   const isCodepoint = /^(?:[Uu][\+\s]|0[xX])?[0-9a-fA-F]{4,6}$/.test(token);
   const isEntity = /^&[0-9A-Za-z_-]+;?$/.test(token) || /^(?:CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-/i.test(token);
@@ -443,14 +154,13 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
         if (state.historyIndex < state.history.length - 1) {
           state.history = state.history.slice(0, state.historyIndex + 1);
         }
+        const sequenceStart = state.history.length - (state.history.at(-1) === chars[0] ? 1 : 0);
         chars.forEach(ch => {
           if (state.history[state.history.length - 1] !== ch) {
             state.history.push(ch);
           }
         });
-        state.historyIndex = state.history.indexOf(chars[0]);
-        if (state.historyIndex === -1) state.historyIndex = 0;
-        updateBreadcrumbsUI();
+        state.historyIndex = sequenceStart;
       }
       effectiveToken = chars[0];
     }
@@ -465,8 +175,9 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
       state.history.push(effectiveToken);
       state.historyIndex = state.history.length - 1;
     }
-    updateBreadcrumbsUI();
   }
+
+  updateBreadcrumbsUI();
 
   // APIリクエスト（/api/char?q=...&alt_ids=...）
   let data = null;
@@ -477,54 +188,23 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
       data = await response.json();
     }
   } catch (err) {
-    console.warn("バックエンドAPI接続待機中(フォールバックデータを表示します):", err);
+    if (requestGeneration !== state.charRequestGeneration) return;
+    console.warn("文字情報を取得できませんでした:", err);
   }
 
-  // フォールバックデータ設定（サーバー未接続時）
+  // JSON解析中に開始された新しい調査も優先する。
+  if (requestGeneration !== state.charRequestGeneration) return;
   if (!data) {
-    if (DEMO_PRESETS_DATA[effectiveToken]) {
-      data = JSON.parse(JSON.stringify(DEMO_PRESETS_DATA[effectiveToken]));
-    } else {
-      const cp = getCodepointHex(effectiveToken);
-      data = {
-        meta: {
-          literal: effectiveToken,
-          char: effectiveToken,
-          codepoint: cp,
-          block_name: "CJK統合漢字",
-          tier: "通常漢字",
-          stroke_count: 10,
-          radical: "部首情報取得中...",
-          ja_on: ["—"],
-          ja_kun: ["—"],
-          badges: ["基本文字"],
-          daikanwa: "—",
-          four_corner: "—",
-          skip_code: "—",
-          cangjie: "—",
-          moji_joho: "—",
-          equivalents: []
-        },
-        alternatives: [{ id: "std", label: "標準構造", ids: effectiveToken }],
-        tree: {
-          type: "char",
-          char: effectiveToken,
-          path: "0",
-          role_label: "全体",
-          bbox: [0.0, 0.0, 1.0, 1.0],
-          children: []
-        },
-        visual: {
-          has_kanjivg: false,
-          interactive_svg: {
-            base_path: null,
-            component_layers: [
-              { path: "0", char: effectiveToken, depth: 0, role_label: "全体", bbox: [0.0, 0.0, 1.0, 1.0], svg_path: null, svg_transform: "" }
-            ]
-          }
-        }
-      };
-    }
+    data = {
+      unavailable: true,
+      meta: {
+        char: effectiveToken, literal: effectiveToken,
+        codepoint: Array.from(effectiveToken).length === 1 ? getCodepointHex(effectiveToken) : "未詳",
+        tier: "情報取得不可", stroke_count: null, radical: "部首未詳",
+        badges: ["文字情報を取得できませんでした。再度調査してください。"]
+      },
+      alternatives: [], tree: null, visual: { has_kanjivg: false }
+    };
   }
 
   state.charData = data;
@@ -894,6 +574,10 @@ function renderCanvas() {
   const visual = state.charData.visual || {};
   const tree = state.charData.tree || {};
 
+  if (state.charData.unavailable) {
+    container.textContent = "文字情報を取得できませんでした。再度調査してください。";
+    return;
+  }
   renderSvgInto(container, visual, tree);
   applyHitTestDepth();
 }
@@ -3468,6 +3152,7 @@ function renderIdsTokens() {
   if (!container || !state.charData) return;
   container.innerHTML = "";
 
+  if (state.charData.unavailable) return;
   const alts = state.charData.alternatives || [];
   const alt = alts[state.activeStructureIndex] || alts[0] || { ids: state.currentChar };
   const idsStr = alt.ids || state.currentChar;
@@ -3689,6 +3374,7 @@ function renderFindChips() {
  * 逆引き検索の実行（CHISE ids-find）
  */
 async function executeFindSearch() {
+  const requestGeneration = ++state.findRequestGeneration;
   const resultsGrid = document.getElementById("resultsGrid");
   if (!resultsGrid) return;
 
@@ -3725,6 +3411,7 @@ async function executeFindSearch() {
     if (maxStroke < 999) params.set("max_strokes", String(maxStroke));
 
     const res = await fetch(`/api/ids-find?${params.toString()}`);
+    if (!res.ok) throw new Error("逆引き検索の取得失敗");
     if (res.ok) {
       const data = await res.json();
       results = data.results || [];
@@ -3741,23 +3428,14 @@ async function executeFindSearch() {
       }
     }
   } catch (e) {
-    console.warn("逆引きAPI通信待機中(ローカルフォールバック実行):", e);
-    results = DEMO_FIND_DATABASE.filter(item => {
-      // 全部品一致（AND検索）
-      const matchesAll = chipsArray.every(c => item.components.includes(c));
-      if (!matchesAll) return false;
-
-      if (hierarchyFilter === "direct" && item.is_direct !== 1) return false;
-      if (hierarchyFilter === "indirect" && item.is_direct !== 0) return false;
-      if (minStroke > 0 && item.stroke_count < minStroke) return false;
-      if (maxStroke < 999 && item.stroke_count > maxStroke) return false;
-
-      return true;
-    });
-    totalCount = results.length;
-    directCount = results.filter(r => r.is_direct === 1).length;
-    indirectCount = results.filter(r => r.is_direct === 0).length;
+    if (requestGeneration !== state.findRequestGeneration) return;
+    console.warn("逆引き検索結果を取得できませんでした:", e);
+    resultsGrid.textContent = "逆引き検索結果を取得できませんでした。再度検索してください。";
+    updateResultsSummary("未詳", "未詳", "未詳");
+    return;
   }
+
+  if (requestGeneration !== state.findRequestGeneration) return;
 
   updateResultsSummary(totalCount, directCount, indirectCount);
   renderFindResults(results, chipsArray);
@@ -4363,10 +4041,8 @@ function initEventListeners() {
         // 段階的ドリルダウン例 (蛍 -> 𰃮 -> 𭕄)
         const sequence = drilldown.split(",");
         state.history = [];
-        sequence.forEach((ch, i) => {
-          state.history.push(ch);
-          state.historyIndex = i;
-        });
+        sequence.forEach(ch => state.history.push(ch));
+        state.historyIndex = 0;
         inspectCharacter(sequence[0], false);
       } else {
         const kanji = btn.getAttribute("data-kanji");

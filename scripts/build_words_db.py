@@ -40,10 +40,12 @@ def map_pos_title(raw_pos: str) -> str:
         return "固有名詞"
     if "名詞" in p or p in ("noun", "n"):
         return "名詞"
-    if "動詞" in p or p in ("verb", "v"):
-        return "動詞"
     if "形容動詞" in p or "形状詞" in p:
         return "形容動詞"
+    if "感動詞" in p or p == "interjection":
+        return "感動詞"
+    if "動詞" in p or p in ("verb", "v"):
+        return "動詞"
     if "形容詞" in p or p in ("adj", "adjective", "a"):
         return "形容詞"
     if "副詞" in p or p in ("adv", "adverb", "r"):
@@ -56,8 +58,6 @@ def map_pos_title(raw_pos: str) -> str:
         return "接尾辞"
     if "接続詞" in p or p == "conjunction":
         return "接続詞"
-    if "感動詞" in p or p == "interjection":
-        return "感動詞"
     if "連体詞" in p:
         return "連体詞"
     if "字義" in p or "意義" in p:
