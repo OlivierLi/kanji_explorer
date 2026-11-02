@@ -263,3 +263,57 @@ class TestDecomposeCharacter:
         assert cdp_node is not None
         assert any(c.get("char") == "玄" for c in cdp_node.get("children", []))
 
+    def test_decompose_gtk00859_and_rui(self):
+        # &GT-K00859; (⿱八𠆢) が八と𠆢に分解され、八への誤等価マッピングが防止されていること
+        assert ids_parser.normalize_entity("&GT-K00859;") == "&GT-K00859;"
+        tree_k00859 = ids_parser.decompose_character("&GT-K00859;", max_depth=2)
+        assert tree_k00859["char"] == "&GT-K00859;"
+        assert tree_k00859["op"] == "⿱"
+        assert [c["char"] for c in tree_k00859["children"]] == ["八", "𠆢"]
+
+        # 睿 (⿱&GT-K01554;⿱&GT-K00859;目) の木に八と𠆢が含まれること
+        tree_rui = ids_parser.decompose_character("睿", max_depth=4)
+        assert tree_rui["char"] == "睿"
+        all_chars = set()
+
+        def _walk(node):
+            if not node:
+                return
+            all_chars.add(node.get("char"))
+            for c in node.get("children", []):
+                _walk(c)
+
+        _walk(tree_rui)
+        assert "八" in all_chars and "𠆢" in all_chars
+
+    def test_decompose_gtk03307(self):
+        # &GT-K03307; (⿱爫幺) が正常に爫と幺に分解されること
+        assert ids_parser.normalize_entity("&GT-K03307;") == "&GT-K03307;"
+        tree_k03307 = ids_parser.decompose_character("&GT-K03307;", max_depth=2)
+        assert tree_k03307["char"] == "&GT-K03307;"
+        assert tree_k03307["op"] == "⿱"
+        assert [c["char"] for c in tree_k03307["children"]] == ["爫", "幺"]
+
+    def test_decompose_c6_2d56_and_gyo(self):
+        # &C6-2D56; (⿱䒑未) が正常に䒑と未に分解され、業の構成要素木にも反映されること
+        assert ids_parser.normalize_entity("&C6-2D56;") == "&C6-2D56;"
+        tree_c6 = ids_parser.decompose_character("&C6-2D56;", max_depth=2)
+        assert tree_c6["char"] == "&C6-2D56;"
+        assert tree_c6["op"] == "⿱"
+        assert [c["char"] for c in tree_c6["children"]] == ["䒑", "未"]
+
+        # 業 の木に䒑と未が含まれること
+        tree_gyo = ids_parser.decompose_character("業", max_depth=4)
+        assert tree_gyo["char"] == "業"
+        all_chars = set()
+
+        def _walk(node):
+            if not node:
+                return
+            all_chars.add(node.get("char"))
+            for c in node.get("children", []):
+                _walk(c)
+
+        _walk(tree_gyo)
+        assert "䒑" in all_chars and "未" in all_chars
+

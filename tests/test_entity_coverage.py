@@ -40,11 +40,11 @@ def _is_entity_resolved(entity: str) -> bool:
         return True
 
     # 1. Structural decomposition in IDS dictionary or component sub-decompositions
-    if P.get_character_ids(entity) is not None or norm in P.COMPONENT_SUBDECOMPOSITIONS:
+    if P.get_character_ids(norm) is not None or norm in P.COMPONENT_SUBDECOMPOSITIONS:
         return True
 
     # 2. Vector SVG rendering from font or local GlyphWiki cache
-    svg = G.get_glyph_svg(entity)
+    svg = G.get_glyph_svg(norm)
     if svg and "<text>" not in svg and "<path" in svg and "<rect" not in svg:
         return True
 

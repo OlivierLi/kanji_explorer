@@ -117,6 +117,13 @@ def collect_reachable_entities(
                     norm = P.normalize_entity(tok)
                     if norm.startswith("&"):
                         reachable_entities.add(norm)
+                    try:
+                        sub_tree = P.decompose_character(
+                            norm, max_depth=6, compute_bbox=False
+                        )
+                        _walk_tree(sub_tree)
+                    except Exception:
+                        pass
 
     print(
         f"  -> Found {len(reachable_entities):,} distinct reachable entities ({time.time() - t0:.2f}s)"
