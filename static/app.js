@@ -369,27 +369,50 @@ function escapeAttr(str) {
  */
 function renderGlyphHTML(token, cssClass = "") {
   if (!token) return "";
-  const isEntity = token.startsWith("&") && token.endsWith(";");
+  const isEntity = token.startsWith("&");
+  const entityToken = isEntity && !token.endsWith(";") ? `${token};` : token;
   const safeCls = escapeAttr(cssClass);
-  const safeTok = escapeAttr(token);
+  const safeTok = escapeAttr(entityToken);
   if (isEntity) {
-    const safeSrc = `/api/glyph?c=${encodeURIComponent(token)}`;
+    const safeSrc = `/api/glyph?c=${encodeURIComponent(entityToken)}`;
     return `<img src="${safeSrc}" class="entity-glyph-img ${safeCls}" alt="${safeTok}" onerror="this.outerHTML='<span class=\\'kanji-text\\'>${safeTok}</span>'">`;
   }
   return `<span class="kanji-text ${safeCls}">${safeTok}</span>`;
 }
 
 /**
- * コードポイントを16進表記文字列に変換
+ * コードポイントを16進表記文字列または実体識別子に変換
  */
 function getCodepointHex(char) {
-  if (!char || char.startsWith("&")) return char || "";
+  if (!char) return "";
+  if (char.startsWith("&")) {
+    return char.replace(/^&|;$/g, "");
+  }
+  if (/^(?:U\+|0x)[0-9A-Fa-f]+$/i.test(char)) {
+    return char.toUpperCase();
+  }
   try {
     const cp = char.codePointAt(0);
     return `U+${cp.toString(16).toUpperCase()}`;
   } catch (e) {
     return char;
   }
+}
+
+function tokenizeIds(idsStr) {
+  return idsStr ? (idsStr.match(/&[^;\s]+;|[\s\S]/gu) || []) : [];
+}
+
+function renderIdsHTML(idsStr, highlightKeywords = []) {
+  if (!idsStr) return "";
+  const hlSet = new Set((highlightKeywords || []).map(k => k.trim()));
+  return tokenizeIds(idsStr).map(tok => {
+    const isHl = hlSet.has(tok) || (tok.startsWith("&") && hlSet.has(tok.slice(1, -1)));
+    const html = tok in IDC_OPERATORS
+      ? `<span class="ids-operator" title="${IDC_OPERATORS[tok].name}">${escapeAttr(tok)}</span>`
+      : renderGlyphHTML(tok);
+    return isHl ? `<span class="result-ids-highlight">${html}</span>` : html;
+  }).join("");
 }
 
 // =============================================================================
@@ -687,13 +710,10 @@ function updateLockControllerUI() {
   if (btnReset) btnReset.disabled = false;
 
   badge.className = "depth-status-badge is-locked";
-  if (hasChildren) {
-    const charName = lockedNode.char || lockedNode.raw_char || "部品";
-    badge.textContent = `第${lockedDepth + 1}階層(${charName}の内部)`;
-  } else {
-    const charName = lockedNode?.char || lockedNode?.raw_char || "";
-    badge.textContent = `第${lockedDepth}階層(末端部品: ${charName})`;
-  }
+  const charName = lockedNode?.char || lockedNode?.raw_char || "部品";
+  badge.innerHTML = hasChildren
+    ? `第${lockedDepth + 1}階層(${renderGlyphHTML(charName)}の内部)`
+    : `第${lockedDepth}階層(末端部品: ${renderGlyphHTML(charName)})`;
 
   // 祖先パンくずリスト描画
   trail.innerHTML = "";
@@ -717,7 +737,7 @@ function updateLockControllerUI() {
     chip.type = "button";
     chip.className = "depth-trail-chip" + (p === state.lockedPath ? " active" : "");
     const chipChar = n?.char || n?.raw_char || n?.role_label || "部品";
-    chip.textContent = `第${d}階層: ${chipChar}`;
+    chip.innerHTML = `第${d}階層: ${renderGlyphHTML(chipChar)}`;
     chip.title = `第${d}階層「${chipChar}」にスコープを切り替えます`;
     chip.addEventListener("click", () => {
       lockComponentScope(p);
@@ -731,7 +751,7 @@ function updateLockControllerUI() {
     btnOpenMain.type = "button";
     btnOpenMain.className = "btn-open-locked-main";
     btnOpenMain.id = "btnOpenLockedMain";
-    btnOpenMain.textContent = `「${lockedNode.char}」を単体調査 →`;
+    btnOpenMain.innerHTML = `「${renderGlyphHTML(lockedNode.char)}」を単体調査 →`;
     btnOpenMain.title = `「${lockedNode.char}」を主文字として詳細分解します`;
     btnOpenMain.addEventListener("click", () => {
       inspectCharacter(lockedNode.char);
@@ -3257,49 +3277,40 @@ function handleWheelHierarchy(deltaY) {
   }
 }
 
-/**
- * リアルタイムHUDの表示更新
- */
-function updateHud(char, path, role, raw_char, metaSummary = null) {
+function setHudContent({ glyph = "", nameHtml = "", codepoint = "", rawChar = "", trail = "", hint = "", isActive = true, opacity = "1" }) {
   const hud = document.getElementById("hoverHud");
   const glyphBox = document.getElementById("hudGlyphBox");
-  const charName = document.getElementById("hudCharName");
-  const codepoint = document.getElementById("hudCodepoint");
-  const rawOrig = document.getElementById("hudRawOrig");
-  const trail = document.getElementById("hudTrail");
-
   if (!hud || !glyphBox) return;
 
-  hud.classList.add("active");
-  glyphBox.innerHTML = renderGlyphHTML(char);
-  glyphBox.style.opacity = "1";
-  charName.textContent = char;
-  codepoint.textContent = getCodepointHex(char);
-  rawOrig.textContent = raw_char ? `(原表記: ${raw_char})` : "";
+  hud.classList.toggle("active", isActive);
+  glyphBox.innerHTML = renderGlyphHTML(glyph);
+  glyphBox.style.opacity = opacity;
+  document.getElementById("hudCharName").innerHTML = nameHtml;
+  document.getElementById("hudCodepoint").textContent = codepoint;
+  document.getElementById("hudRawOrig").textContent = (rawChar && rawChar !== glyph) ? `(原表記: ${rawChar})` : "";
+  document.getElementById("hudTrail").textContent = trail;
+  const hintEl = document.getElementById("hudHint");
+  if (hintEl && hint) hintEl.textContent = hint;
+}
 
-  let extra = "";
-  if (metaSummary) {
-    const parts = [];
-    if (metaSummary.stroke_count) parts.push(`${metaSummary.stroke_count}画`);
-    if (metaSummary.ja_on && metaSummary.ja_on.length > 0) parts.push(`音: ${metaSummary.ja_on.join("・")}`);
-    if (metaSummary.ja_kun && metaSummary.ja_kun.length > 0) parts.push(`訓: ${metaSummary.ja_kun.join("・")}`);
-    if (parts.length > 0) extra = ` | ${parts.join(" | ")}`;
-  }
+function updateHud(char, path, role, raw_char, metaSummary = null) {
+  const parts = [];
+  if (metaSummary?.stroke_count) parts.push(`${metaSummary.stroke_count}画`);
+  if (metaSummary?.ja_on?.length) parts.push(`音: ${metaSummary.ja_on.join("・")}`);
+  if (metaSummary?.ja_kun?.length) parts.push(`訓: ${metaSummary.ja_kun.join("・")}`);
+  const extra = parts.length ? ` | ${parts.join(" | ")}` : "";
 
-  trail.textContent = `階層パス: ${path}${role ? ` [役割: ${role}]` : ""}${extra}`;
+  setHudContent({
+    glyph: char,
+    nameHtml: renderGlyphHTML(char),
+    codepoint: getCodepointHex(char),
+    rawChar: raw_char,
+    trail: `階層パス: ${path}${role ? ` [役割: ${role}]` : ""}${extra}`,
+    isActive: true
+  });
 }
 
 function resetHud() {
-  const hud = document.getElementById("hoverHud");
-  const glyphBox = document.getElementById("hudGlyphBox");
-  const charName = document.getElementById("hudCharName");
-  const codepoint = document.getElementById("hudCodepoint");
-  const rawOrig = document.getElementById("hudRawOrig");
-  const trail = document.getElementById("hudTrail");
-  const hint = document.getElementById("hudHint");
-
-  if (!hud || !glyphBox) return;
-
   if (state.lockedPath) {
     const lockedNode = findNodeByPath(state.charData?.tree, state.lockedPath);
     if (lockedNode) {
@@ -3308,40 +3319,32 @@ function resetHud() {
       const isComposite = !lockedNode.char && !lockedNode.raw_char;
       const dispChar = lockedNode.char || lockedNode.raw_char || (lockedNode.role_label ? `[${lockedNode.role_label}]` : "複合部品");
 
-      hud.classList.add("active");
-      glyphBox.innerHTML = renderGlyphHTML(dispChar);
-      glyphBox.style.opacity = "1";
-      charName.textContent = `[固定] ${dispChar}`;
-      codepoint.textContent = isComposite ? "(複合要素)" : getCodepointHex(dispChar);
-      rawOrig.textContent = lockedNode.raw_char ? `(原表記: ${lockedNode.raw_char})` : "";
-
-      if (hasChildren) {
-        trail.textContent = `階層パス: ${state.lockedPath} [役割: ${lockedNode.role_label || "固定部品"}] | 内部の第${lockedDepth + 1}階層部品を探索中`;
-        if (hint) {
-          hint.textContent = `[固定中: ${dispChar}] 内部の第${lockedDepth + 1}階層部品をホバーで確認(クリックでさらに固定 / 「選択解除」で解除)`;
-        }
-      } else {
-        trail.textContent = `階層パス: ${state.lockedPath} [役割: ${lockedNode.role_label || "末端部品"}] | 末端部品固定中`;
-        if (hint) {
-          hint.textContent = `クリックで「${dispChar}」を単体調査 ／ 選択解除で復帰`;
-        }
-      }
+      setHudContent({
+        glyph: dispChar,
+        nameHtml: `[固定] ${renderGlyphHTML(dispChar)}`,
+        codepoint: isComposite ? "(複合要素)" : getCodepointHex(dispChar),
+        rawChar: lockedNode.raw_char,
+        trail: `階層パス: ${state.lockedPath} [役割: ${lockedNode.role_label || "固定部品"}] | ${hasChildren ? `内部の第${lockedDepth + 1}階層部品を探索中` : "末端部品固定中"}`,
+        hint: hasChildren
+          ? `[固定中: ${dispChar}] 内部の第${lockedDepth + 1}階層部品をホバーで確認(クリックでさらに固定 / 「選択解除」で解除)`
+          : `クリックで「${dispChar}」を単体調査 ／ 選択解除で復帰`,
+        isActive: true
+      });
       return;
     }
   }
 
   // デフォルト状態（未固定時）
-  hud.classList.remove("active");
   const cur = state.currentChar || "中";
-  glyphBox.innerHTML = renderGlyphHTML(cur);
-  glyphBox.style.opacity = "0.75";
-  charName.textContent = `${cur}(全体)`;
-  codepoint.textContent = getCodepointHex(cur);
-  rawOrig.textContent = "";
-  trail.textContent = "階層パス: 0 [役割: 全体]";
-  if (hint) {
-    hint.textContent = "※ 部品ホバーで字形確認 / クリックで選択・逆引き検索";
-  }
+  setHudContent({
+    glyph: cur,
+    nameHtml: `${renderGlyphHTML(cur)}(全体)`,
+    codepoint: getCodepointHex(cur),
+    trail: "階層パス: 0 [役割: 全体]",
+    hint: "※ 部品ホバーで字形確認 / クリックで選択・逆引き検索",
+    isActive: false,
+    opacity: "0.75"
+  });
 }
 
 /**
@@ -3451,7 +3454,7 @@ function renderStructureSelector() {
     const btn = document.createElement("button");
     btn.className = `struct-btn ${idx === state.activeStructureIndex ? "active" : ""}`;
     const label = alt.label || alt.source || alt.id || "構造";
-    btn.textContent = `${label}: ${alt.ids}`;
+    btn.innerHTML = `${escapeAttr(label)}: ${renderIdsHTML(alt.ids)}`;
     btn.addEventListener("click", () => {
       state.activeStructureIndex = idx;
       inspectCharacter(state.currentChar, false, alt.ids);
@@ -3469,10 +3472,7 @@ function renderIdsTokens() {
   const alt = alts[state.activeStructureIndex] || alts[0] || { ids: state.currentChar };
   const idsStr = alt.ids || state.currentChar;
 
-  // サロゲートペア（拡張漢字）およびCHISE実体参照を安全にトークン化
-  const tokens = idsStr.match(/&[^;\s]+;|[\s\S]/gu) || [];
-
-  tokens.forEach(tok => {
+  tokenizeIds(idsStr).forEach(tok => {
     const chip = document.createElement("span");
     chip.className = "ids-token-chip";
     if (tok in IDC_OPERATORS) {
@@ -3530,7 +3530,7 @@ function renderRecursiveTree() {
 
     const charName = document.createElement("span");
     charName.className = "tree-node-char";
-    charName.textContent = node.char || node.op;
+    charName.innerHTML = renderGlyphHTML(node.char || node.op);
     nameRow.appendChild(charName);
 
     if (node.op && node.op in IDC_OPERATORS) {
@@ -3571,7 +3571,7 @@ function renderRecursiveTree() {
 
     const sub = document.createElement("span");
     sub.className = "tree-node-sub";
-    const rawInfo = node.raw_char ? ` (原表記: ${node.raw_char})` : "";
+    const rawInfo = (node.raw_char && node.raw_char !== node.char) ? ` (原表記: ${escapeAttr(node.raw_char)})` : "";
     const bboxFormatted = (node.bbox || []).map(v => typeof v === "number" ? v.toFixed(2) : v).join(", ");
     sub.textContent = `${getCodepointHex(node.char || "")}${rawInfo} | 領域: [${bboxFormatted}]`;
     meta.appendChild(sub);
@@ -3813,12 +3813,12 @@ function renderFindResults(results, activeKeywords = []) {
 
     const title = document.createElement("span");
     title.className = "result-char-title";
-    title.textContent = char;
+    title.innerHTML = renderGlyphHTML(char);
     header.appendChild(title);
 
     const cp = document.createElement("span");
     cp.className = "result-codepoint";
-    cp.textContent = codepoint;
+    cp.textContent = getCodepointHex(char) || codepoint;
     header.appendChild(cp);
 
     info.appendChild(header);
@@ -3872,7 +3872,7 @@ function renderFindResults(results, activeKeywords = []) {
       const indirectBadge = document.createElement("span");
       indirectBadge.className = "badge badge-indirect";
       if (viaChar) {
-        indirectBadge.innerHTML = `間接(経由: <a class="via-link" data-via="${escapeAttr(viaChar)}">${escapeAttr(viaChar)}</a>)`;
+        indirectBadge.innerHTML = `間接(経由: <a class="via-link" data-via="${escapeAttr(viaChar)}">${renderGlyphHTML(viaChar)}</a>)`;
         const viaLink = indirectBadge.querySelector(".via-link");
         if (viaLink) {
           viaLink.addEventListener("click", (e) => {
@@ -3892,13 +3892,7 @@ function renderFindResults(results, activeKeywords = []) {
     if (idsStr) {
       const idsRow = document.createElement("div");
       idsRow.className = "result-ids-row";
-      let formattedIds = idsStr;
-      activeKeywords.forEach(kw => {
-        if (kw && formattedIds.includes(kw)) {
-          formattedIds = formattedIds.split(kw).join(`<span class="result-ids-highlight">${kw}</span>`);
-        }
-      });
-      idsRow.innerHTML = `構造: ${formattedIds}`;
+      idsRow.innerHTML = `構造: ${renderIdsHTML(idsStr, activeKeywords)}`;
       info.appendChild(idsRow);
     }
 

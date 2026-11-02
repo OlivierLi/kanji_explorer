@@ -980,13 +980,29 @@ class TestBugRadicalFormMapBidirectionalSymmetry:
         assert base in eq_variant, f"{variant} の等価集合に {base} が含まれていません"
 
 
+class TestUnifiedCharacterDisplay:
+    """Web UI 全体における文字・実体参照（&...;）・IDS記号表示の統一性検証."""
 
+    def test_app_js_unified_helpers_exist(self):
+        js_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        js_text = js_path.read_text(encoding="utf-8")
 
+        assert "function tokenizeIds(idsStr)" in js_text
+        assert "function renderIdsHTML(idsStr" in js_text
+        assert "function setHudContent(" in js_text
+        assert "renderGlyphHTML(cur)" in js_text
+        assert "renderGlyphHTML(dispChar)" in js_text
+        assert "renderGlyphHTML(node.char || node.op)" in js_text
 
+    def test_structure_and_search_use_unified_renderer(self):
+        js_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        js_text = js_path.read_text(encoding="utf-8")
 
-
-
-
+        # 構造切替ボタンおよび検索結果構造行が renderIdsHTML を用いていること
+        assert "renderIdsHTML(alt.ids)" in js_text
+        assert "renderIdsHTML(idsStr, activeKeywords)" in js_text
+        # 検索結果タイトルが renderGlyphHTML を用いていること
+        assert "title.innerHTML = renderGlyphHTML(char);" in js_text
 
 
 

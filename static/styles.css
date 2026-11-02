@@ -1790,6 +1790,13 @@ body.audit-view {
   color: var(--text-secondary);
 }
 
+.ids-operator {
+  font-family: var(--font-kanji);
+  font-weight: 600;
+  opacity: 0.75;
+  margin: 0 1px;
+}
+
 .result-ids-highlight {
   color: var(--accent-vermilion);
   font-weight: 700;
