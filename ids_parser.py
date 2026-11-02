@@ -92,7 +92,6 @@ IDC_INFO: dict[str, dict[str, Any]] = {
 CHISE_ENTITY_UNICODE_MAP: dict[str, str] = {
     "&CDP-8958;": "⺼",
     "&CDP-8B43;": "阝",
-    "&CDP-8B7C;": "艮",
     "&GT-K01085;": "𠫓",
     "&CDP-89AE;": "冫",
     "&CDP-8964;": "𫠣",
@@ -118,6 +117,7 @@ CHISE_ENTITY_UNICODE_MAP: dict[str, str] = {
     "&C4-2535;": "𠈌",
     "&C5-2E51;": "𤔌",
     "&MJ007273;": "八",
+    "&GT-K02140;": "乑",
 }
 
 
@@ -263,7 +263,7 @@ COMPONENT_SUBDECOMPOSITIONS: dict[str, str] = {
     "&CDP-89B0;": "⿱⿱一𠃑⿻乚三",
     "敢": "⿰⿱一耳攵",
     "&GT-K00135;": "𫝀",
-    "&CDP-8BA4;": "⿹⿻戈𢆶",
+    "&CDP-8BA4;": "⿻戈𢆶",
     "&CDP-8BB2;": "⿳十罒一",
     "&GT-K02952;": "⿱十罒",
     "&CDP-8D44;": "⿳士冖一",
@@ -271,12 +271,16 @@ COMPONENT_SUBDECOMPOSITIONS: dict[str, str] = {
     "&GT-K01666;": "⿱毌力",
     "&CDP-89F4;": "⿻口人",
     "&CDP-88BA;": "⿻口土",
-    "&CDP-89CC;": "⿲丨丨",
+    "&CDP-89CC;": "⿰丨丨",
     "&CDP-8CD4;": "⿱一自",
     "&GT-K00880;": "⿱⺊冖",
     "&CDP-8BBF;": "丂",
     "&CDP-8D6B;": "业",
     "&CDP-89B9;": "⿱刀口",
+    "&CDP-89E0;": "⿱𠕁一",
+    "&GT-K00132;": "⿰丨丨",
+    "&GT-K02140;": "乑",
+    "&MCS-60012539;": "&CDP-89E7;",
 }
 
 # 筆画レベルの下位分解（これ以上意味を持たない単一筆画への展開）
@@ -613,16 +617,16 @@ load_equivalent_unified_ideographs()
 # 4. CHISE エンティティおよび部品の正規化関数
 # ==============================================================================
 
-_RE_CDP_VARIANT = re.compile(r"^&CDP-i\d+-")
-_RE_CODESET = re.compile(r"^&(J90|J83|JX1|JX2|G0|K0)-([0-9A-Fa-f]{4});$")
+_RE_CDP_VARIANT = re.compile(r"^&CDP-[iv]\d+-")
+_RE_CODESET = re.compile(r"^&(J90|J83|JSP|JX1|JX2|G0|K0)-([0-9A-Fa-f]{4});$")
 _RE_UNICODE_HEX_1 = re.compile(
-    r"^&(?:U-[iv]?\d*\+|hanaJU\+|(?:A-)?compU\+|(?:A-)?IWDSU\+|(?:A-)?cgnU\+|UU\+|U\+)([0-9A-Fa-f]+);$"
+    r"^&(?:U-[iv]?\d*\+|hanaJU\+|BUCS\+|CU\+|GU\+|(?:A-)?compU\+|(?:A-)?IWDSU\+|(?:A-)?cgnU\+|UU\+|U\+)([0-9A-Fa-f]+);$"
 )
 _RE_UNICODE_HEX_2 = re.compile(r"^&U-([0-9A-Fa-f]{4,8});$")
 
 
 def _decode_codeset(entity: str) -> str | None:
-    """CHISE の coded-charset 実体参照（J90, J83, JX1, JX2, G0, K0）を Unicode にデコードする.
+    """CHISE の coded-charset 実体参照（J90, J83, JSP, JX1, JX2, G0, K0）を Unicode にデコードする.
 
     J78（コード交換）は意図的に変換対象外としています。
     デコード結果が単一文字かつ私用領域（PUA）でない場合のみ採用します。
@@ -636,6 +640,9 @@ def _decode_codeset(entity: str) -> str | None:
     except ValueError:
         return None
     if cs in ("J90", "J83"):
+        codec = "euc_jp"
+    elif cs == "JSP":
+        b = b"\x8f" + b
         codec = "euc_jp"
     elif cs == "JX1":
         codec = "euc_jis_2004"
@@ -695,7 +702,7 @@ def normalize_entity(entity: str, use_maps: bool = True) -> str:
         return CHISE_ENTITY_UNICODE_MAP[entity]
 
     # 7. Coded-charset エンティティのデコード (&J90-XXXX;, &JX1-XXXX; 等)
-    if entity.startswith(("&J90-", "&J83-", "&JX1-", "&JX2-", "&G0-", "&K0-")):
+    if entity.startswith(("&J90-", "&J83-", "&JSP-", "&JX1-", "&JX2-", "&G0-", "&K0-")):
         decoded = _decode_codeset(entity)
         if decoded is not None:
             return decoded

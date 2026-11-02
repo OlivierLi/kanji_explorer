@@ -5,7 +5,5 @@
 #   2. When an entity in this list becomes resolvable, the test FAILS until
 #      it is removed from this file.
 # Entities in the Jōyō/graded tier must NEVER be in this allowlist (0 allowed).
-
-&GT-K00132;
-&GT-K02140;
-&MCS-60012539;
+#
+# (Currently empty: 100% entity resolution coverage achieved across all Basic CJK kanji)

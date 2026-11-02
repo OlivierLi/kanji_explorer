@@ -1126,10 +1126,15 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
     norm_slug = norm_token.strip("&;").lower()
 
     candidates: list[str] = [slug, norm_slug]
-    if slug.startswith("i-"):
-        candidates.append(slug[2:])
-    if norm_slug.startswith("i-"):
-        candidates.append(norm_slug[2:])
+    for pfx in ("i-", "a-", "g2-"):
+        if slug.startswith(pfx):
+            candidates.append(slug[len(pfx):])
+        if norm_slug.startswith(pfx):
+            candidates.append(norm_slug[len(pfx):])
+    if norm_token in ids_parser.COMPONENT_SUBDECOMPOSITIONS:
+        sub_val = ids_parser.COMPONENT_SUBDECOMPOSITIONS[norm_token]
+        if sub_val.startswith("&") and sub_val.endswith(";"):
+            candidates.append(sub_val.strip("&;").lower())
 
     seen_slugs: set[str] = set()
     cache_candidates = []

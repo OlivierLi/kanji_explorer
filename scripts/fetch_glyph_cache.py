@@ -53,10 +53,6 @@ def get_candidate_slugs(entity: str) -> list[str]:
     if slug.startswith("m-") and slug[2:].isdigit():
         slugs.append(f"dkw-{int(slug[2:]):05d}")
 
-    # GT-K variants
-    if slug.startswith("gt-k"):
-        slugs.append(slug.replace("gt-k", "gt-k"))
-
     return list(dict.fromkeys(slugs))
 
 
@@ -213,11 +209,15 @@ def main() -> None:
     scope = "all" if args.all else "joyo_basic"
     entities = collect_reachable_entities(scope=scope)
 
-    # Filter out entities that already resolve to Jigmo font glyphs
+    # Filter out entities that already resolve to Jigmo font glyphs, IDS dictionary, or component subdecompositions
     unresolved_entities: list[str] = []
     for ent in sorted(entities):
         norm = P.normalize_entity(ent)
         if not norm.startswith("&") and G.get_jigmo_path(norm):
+            continue
+        if norm in P.COMPONENT_SUBDECOMPOSITIONS or ent in P.COMPONENT_SUBDECOMPOSITIONS:
+            continue
+        if P.get_character_ids(norm) is not None:
             continue
         unresolved_entities.append(ent)
 

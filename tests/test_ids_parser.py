@@ -51,7 +51,15 @@ class TestChiseNormalization:
         ("&JX2-7461;", "䍃"),
         ("&G0-4630;", "瓢"),
         ("&K0-7443;", "遷"),
+        ("&JSP-457C;", "歰"),
         ("&J78-4B29;", "&J78-4B29;"),
+        # Unicode Hex variants (BUCS+, CU+, GU+)
+        ("&BUCS+518C;", "册"),
+        ("&CU+2AE8D;", "𪺍"),
+        ("&GU+37B7;", "㞷"),
+        # CDP variant prefixes (i and v)
+        ("&CDP-v001-8BEA;", "刂"),
+        ("&CDP-i001-8BD9;", "甲"),
         # Wrapper prefix stripping (A-, g2-)
         ("&A-U-i002+34BC;", "㒼"),
         ("&A-CDP-i001-88BA;", "&CDP-88BA;"),
@@ -60,6 +68,8 @@ class TestChiseNormalization:
         ("&g2-MJ007273;", "八"),
         # Generated map resolution
         ("&AJ1-01904;", "玄"),
+        ("&CDP-8B7C;", "皀"),
+        ("&GT-K02140;", "乑"),
     ])
     def test_normalize_entity(self, entity, expected):
         assert ids_parser.normalize_entity(entity) == expected
@@ -87,6 +97,12 @@ class TestRadicalEquivalence:
         # 氵, ⺡, 水 の部首等価グループ
         sanzui_group = ids_parser.EQUIV_GROUPS.get("氵", [])
         assert "水" in sanzui_group or "⺡" in sanzui_group
+
+    def test_radical_independence_gon_and_hyou(self):
+        # 艮 (康煕部首138) と 皀 (康煕部首108) が誤って同一グループにマージされないこと
+        assert "皀" not in ids_parser.EQUIV_GROUPS.get("艮", [])
+        assert "艮" not in ids_parser.EQUIV_GROUPS.get("皀", [])
+        assert ids_parser.normalize_entity("&CDP-8B7C;") == "皀"
 
 
 class TestTokenizeIds:
@@ -316,4 +332,65 @@ class TestDecomposeCharacter:
 
         _walk(tree_gyo)
         assert "䒑" in all_chars and "未" in all_chars
+
+    def test_decompose_cdp_8ba4_and_ki(self):
+        # &CDP-8BA4; (⿻戈𢆶) がアリティ2の⿻構造として正しく展開され、幾・畿に？欠損が発生しないこと
+        tree_cdp = ids_parser.decompose_character("&CDP-8BA4;", max_depth=2)
+        assert tree_cdp["op"] == "⿻"
+        assert [c["char"] for c in tree_cdp["children"]] == ["戈", "𢆶"]
+
+        def _has_missing(node):
+            if not node:
+                return False
+            if node.get("missing"):
+                return True
+            return any(_has_missing(c) for c in node.get("children", []))
+
+        tree_ki = ids_parser.decompose_character("畿", max_depth=5)
+        assert not _has_missing(tree_ki)
+
+    def test_decompose_cdp_89cc_and_kai(self):
+        # &CDP-89CC; (⿰丨丨) がアリティ2の⿰構造として正しく展開され、囬の内側に？欠損が発生しないこと
+        tree_cdp = ids_parser.decompose_character("&CDP-89CC;", max_depth=2)
+        assert tree_cdp["op"] == "⿰"
+        assert [c["char"] for c in tree_cdp["children"]] == ["丨", "丨"]
+
+        def _has_missing(node):
+            if not node:
+                return False
+            if node.get("missing"):
+                return True
+            return any(_has_missing(c) for c in node.get("children", []))
+
+        tree_kai = ids_parser.decompose_character("囬", max_depth=5)
+        assert not _has_missing(tree_kai)
+
+    def test_decompose_cdp_89e0_and_ten(self):
+        # &CDP-89E0; (⿱𠕁一) が正しく展開され、典の構成要素木に反映されること
+        tree_cdp = ids_parser.decompose_character("&CDP-89E0;", max_depth=2)
+        assert tree_cdp["op"] == "⿱"
+        assert [c["char"] for c in tree_cdp["children"]] == ["𠕁", "一"]
+
+        tree_ten = ids_parser.decompose_character("典", max_depth=4)
+        assert tree_ten["char"] == "典"
+        all_chars = set()
+
+        def _walk(node):
+            if not node:
+                return
+            all_chars.add(node.get("char"))
+            for c in node.get("children", []):
+                _walk(c)
+
+        _walk(tree_ten)
+        assert "𠕁" in all_chars or "&CDP-89E0;" in all_chars
+
+    def test_decompose_gtk00132_and_mcs(self):
+        # &GT-K00132; (⿰丨丨) および &MCS-60012539; (&CDP-89E7;) の解決検証
+        tree_gtk = ids_parser.decompose_character("&GT-K00132;", max_depth=2)
+        assert tree_gtk["op"] == "⿰"
+        assert [c["char"] for c in tree_gtk["children"]] == ["丨", "丨"]
+
+        assert ids_parser.COMPONENT_SUBDECOMPOSITIONS.get("&MCS-60012539;") == "&CDP-89E7;"
+
 
