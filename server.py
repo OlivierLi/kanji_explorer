@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import email.utils
 import copy
+from functools import wraps
 import gzip
 import json
 import mimetypes
@@ -24,7 +25,7 @@ import sys
 import threading
 import tempfile
 import zlib
-from typing import Any
+from typing import Any, Callable
 import urllib.parse
 import html
 import io
@@ -434,6 +435,22 @@ def get_joyo_characters() -> list[str]:
         return []
 
 
+def _snapshot_read(query: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    """Keep counts and rows in one read snapshot without committing caller work."""
+    @wraps(query)
+    def read(conn: sqlite3.Connection, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # A savepoint works for read-only connections and nests inside an
+        # existing transaction. Repeated names release the innermost scope.
+        conn.execute("SAVEPOINT api_query")
+        try:
+            return query(conn, *args, **kwargs)
+        finally:
+            conn.execute("RELEASE api_query")
+
+    return read
+
+
+@_snapshot_read
 def query_reading_matches_db(
     conn: sqlite3.Connection,
     readings: list[str],
@@ -467,6 +484,7 @@ def query_reading_matches_db(
             "results": [row_to_result_item(row) for row in rows]}
 
 
+@_snapshot_read
 def query_component_matches_db(
     conn: sqlite3.Connection,
     components: list[str],
@@ -536,6 +554,7 @@ def query_component_matches_db(
     }
 
 
+@_snapshot_read
 def query_component_closure_db(
     conn: sqlite3.Connection, char: str
 ) -> dict[str, Any]:
@@ -629,6 +648,7 @@ def query_component_closure_fallback(char: str) -> dict[str, Any]:
     }
 
 
+@_snapshot_read
 def query_words_db(
     conn: sqlite3.Connection,
     canonical_char: str,
