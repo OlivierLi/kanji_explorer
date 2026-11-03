@@ -15,10 +15,10 @@ import sqlite3
 import time
 import zipfile
 import xml.etree.ElementTree as ET
-from collections import deque
 from pathlib import Path
 from typing import Any
 
+from component_graph import ComponentGraph
 import ids_parser
 import jp_metadata
 
@@ -543,53 +543,12 @@ def build_database() -> None:
 
     closure_rows: list[tuple] = []
 
+    graph = ComponentGraph(parent_to_primary_children, parent_to_alt_children)
     for target_char in all_chars:
         target_priority, target_strokes, target_freq = char_meta_map.get(
             target_char, (5, None, None)
         )
-
-        # target_char の子要素探索 (BFS)
-        closure: dict[str, tuple[int, int, str]] = {}
-        queue = deque()
-
-        # 1. プライマリ（CHISE優先）の子要素を探索
-        primary_children = parent_to_primary_children.get(target_char, [])
-        for c in primary_children:
-            if c == target_char:
-                continue
-            closure[c] = (1, 1, "")
-            queue.append((c, 1, c))
-
-        while queue:
-            curr, depth, top_child = queue.popleft()
-            if depth >= 6:
-                continue
-            for nxt in parent_to_primary_children.get(curr, []):
-                if nxt == target_char:
-                    continue
-                if nxt not in closure:
-                    closure[nxt] = (depth + 1, 0, top_child)
-                    queue.append((nxt, depth + 1, top_child))
-
-        # 2. 代替（apparent / cjkvi）の子要素で未到達のものを追加探索
-        alt_children = parent_to_alt_children.get(target_char, [])
-        for alt_c in alt_children:
-            if alt_c == target_char:
-                continue
-            if alt_c not in closure:
-                closure[alt_c] = (1, 1, "")
-                queue.append((alt_c, 1, alt_c))
-
-        while queue:
-            curr, depth, top_child = queue.popleft()
-            if depth >= 6:
-                continue
-            for nxt in parent_to_primary_children.get(curr, []):
-                if nxt == target_char:
-                    continue
-                if nxt not in closure:
-                    closure[nxt] = (depth + 1, 0, top_child)
-                    queue.append((nxt, depth + 1, top_child))
+        closure = graph.closure(target_char)
 
         for comp, (min_depth, is_direct, via_char) in closure.items():
             closure_rows.append((

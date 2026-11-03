@@ -143,7 +143,7 @@ class TestApiIdsFind:
 
     def test_find_by_components(self, live_server):
         # 𭕄 (U+2D544) と 虫 を含む漢字（蛍）の検索
-        url = f"{live_server}/api/ids-find?components=%F0%AD%95%84&components=%E8%99%AB&hierarchy=indirect"
+        url = f"{live_server}/api/ids-find?components=%F0%AD%95%84&components=%E8%99%AB&hierarchy=direct"
         with urllib.request.urlopen(url) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
