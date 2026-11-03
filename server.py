@@ -12,14 +12,18 @@ from __future__ import annotations
 import argparse
 import email.utils
 import functools
+import gzip
 import json
 import mimetypes
 import os
 from pathlib import Path
 import re
 import sqlite3
+import shutil
 import sys
 import threading
+import tempfile
+import zlib
 from typing import Any
 import urllib.parse
 import html
@@ -43,27 +47,33 @@ DB_PATH = DATA_DIR / "kanji_explorer.db"
 _thread_local = threading.local()
 
 
+def _ensure_database_file() -> bool:
+    """初回展開は固有の一時ファイルを使い、完了したDBだけを公開します。"""
+    if DB_PATH.is_file():
+        return True
+    package = DB_PATH.with_suffix(DB_PATH.suffix + ".gz")
+    temporary = None
+    try:
+        with gzip.open(package, "rb") as source:
+            with tempfile.NamedTemporaryFile(
+                dir=DB_PATH.parent, prefix=DB_PATH.name + ".", suffix=".tmp", delete=False
+            ) as target:
+                temporary = Path(target.name)
+                shutil.copyfileobj(source, target)
+        temporary.replace(DB_PATH)
+        return True
+    except (OSError, EOFError, zlib.error):
+        # Another worker may have finished a successful extraction meanwhile.
+        return DB_PATH.is_file()
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def get_db_connection() -> sqlite3.Connection | None:
-    """
-    スレッドセーフなSQLite読み込み専用接続を取得します。
-    データベースファイルが存在しない場合は None を返します。
-    kanji_explorer.db が未解凍で kanji_explorer.db.gz が存在する場合は自動解凍します。
-    """
-    if not DB_PATH.is_file():
-        gz_path = DATA_DIR / "kanji_explorer.db.gz"
-        if gz_path.is_file():
-            try:
-                import gzip
-                import shutil
-                temp_path = DATA_DIR / "kanji_explorer.db.tmp"
-                with gzip.open(gz_path, "rb") as f_in, open(temp_path, "wb") as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                temp_path.replace(DB_PATH)
-            except Exception:
-                if not DB_PATH.is_file():
-                    return None
-        else:
-            return None
+    """スレッド専用の読込接続を取得し、必要なら圧縮DBを安全に展開します。"""
+    if not _ensure_database_file():
+        return None
 
     conn = getattr(_thread_local, "conn", None)
     if conn is None:
