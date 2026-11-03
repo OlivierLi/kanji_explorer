@@ -429,6 +429,75 @@ def get_joyo_characters() -> list[str]:
         return []
 
 
+def query_component_matches_db(
+    conn: sqlite3.Connection,
+    components: list[str],
+    mode: str = "all",
+    tier: str = "all",
+    min_strokes: int | None = None,
+    max_strokes: int | None = None,
+    limit: int = 120,
+) -> dict[str, Any]:
+    """同等部品を統合し、件数・分類・経由文字を同一の対象集合から返します。"""
+    primary = components[0]
+    equivs = sorted({primary, *ids_parser.EQUIV_GROUPS.get(primary, [])})
+    placeholders = ", ".join("?" for _ in equivs)
+    filters, filter_params = _build_tier_and_stroke_filters(tier, min_strokes, max_strokes)
+    for component in components[1:]:
+        others = sorted({component, *ids_parser.EQUIV_GROUPS.get(component, [])})
+        ph = ", ".join("?" for _ in others)
+        filters.append(f"c.char IN (SELECT target_char FROM component_closure WHERE component IN ({ph}))")
+        filter_params.extend(others)
+    where_sql = " AND ".join(["r.match_rank = 1", *filters])
+
+    # Pick one coherent source row per target. Direct matches take precedence;
+    # indirect matches use the shortest path with a deterministic tie-break.
+    matches_sql = f"""
+        WITH ranked AS (
+            SELECT cc.*, ROW_NUMBER() OVER (
+                PARTITION BY cc.target_char
+                ORDER BY cc.is_direct DESC, cc.min_depth ASC,
+                         cc.target_priority ASC, cc.component ASC, COALESCE(cc.via_char, '') ASC
+            ) AS match_rank
+            FROM component_closure cc
+            WHERE cc.component IN ({placeholders})
+        ), matches AS (
+            SELECT c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
+                   c.ja_on, c.ja_kun, c.grade, c.freq, c.sort_priority,
+                   r.is_direct, r.min_depth,
+                   CASE WHEN r.is_direct = 1 THEN '' ELSE r.via_char END AS via_char
+            FROM ranked r JOIN characters c ON c.char = r.target_char
+            WHERE {where_sql}
+        )
+    """
+    params = equivs + filter_params
+    counts = conn.execute(matches_sql + """
+        SELECT COUNT(*), COALESCE(SUM(is_direct), 0),
+               COALESCE(SUM(1 - is_direct), 0) FROM matches
+    """, params).fetchone()
+    base_total, direct_total, indirect_total = counts
+    if mode == "direct":
+        mode_filter, total = "WHERE is_direct = 1", direct_total
+    elif mode in ("indirect", "transitive"):
+        mode_filter, total = "WHERE is_direct = 0", indirect_total
+    else:
+        mode_filter, total = "", base_total
+    rows = conn.execute(matches_sql + f"""
+        SELECT * FROM matches {mode_filter}
+        ORDER BY COALESCE(freq, 999999) ASC,
+                 COALESCE(grade, 999) ASC, sort_priority ASC,
+                 CASE WHEN COALESCE(ja_on, '') != '' OR COALESCE(ja_kun, '') != '' THEN 0 ELSE 1 END ASC,
+                 min_depth ASC, COALESCE(stroke_count, 999) ASC, char ASC
+        LIMIT ?
+    """, [*params, limit]).fetchall()
+    return {
+        "total": total,
+        "direct_total": direct_total,
+        "indirect_total": indirect_total,
+        "results": [row_to_result_item(row) for row in rows],
+    }
+
+
 def query_component_closure_db(
     conn: sqlite3.Connection, char: str
 ) -> dict[str, Any]:
@@ -436,80 +505,16 @@ def query_component_closure_db(
     component_closure テーブルから指定文字（および同等部首・文字）を含む
     直接（direct）および間接（transitive/indirect）漢字群を取得します。
     """
-    equivs = [char] + [
-        eq for eq in ids_parser.EQUIV_GROUPS.get(char, []) if eq != char
-    ]
-    placeholders = ", ".join(["?"] * len(equivs))
-
-    # 1. 直接構成要素（is_direct = 1）の総数と一覧
-    cur = conn.execute(
-        f"SELECT COUNT(DISTINCT target_char) FROM component_closure WHERE component IN ({placeholders}) AND is_direct = 1",
-        equivs,
-    )
-    direct_total = cur.fetchone()[0]
-
-    cur = conn.execute(
-        f"""
-        SELECT DISTINCT
-            c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
-            c.ja_on, c.ja_kun, c.grade, c.freq,
-            cc.target_priority
-        FROM component_closure cc
-        JOIN characters c ON cc.target_char = c.char
-        WHERE cc.component IN ({placeholders}) AND cc.is_direct = 1
-        ORDER BY
-            COALESCE(c.freq, 999999) ASC,
-            CASE WHEN c.grade IS NOT NULL THEN c.grade ELSE 999 END ASC,
-            c.sort_priority ASC,
-            CASE WHEN (c.ja_on IS NOT NULL AND c.ja_on != '') OR (c.ja_kun IS NOT NULL AND c.ja_kun != '') THEN 0 ELSE 1 END ASC,
-            COALESCE(c.stroke_count, 999) ASC
-        LIMIT 150
-        """,
-        equivs,
-    )
-    direct_rows = cur.fetchall()
-    direct_list = [row_to_result_item(r, is_direct=1) for r in direct_rows]
-
-    # 2. 間接構成要素（is_direct = 0）の総数と一覧
-    cur = conn.execute(
-        f"SELECT COUNT(DISTINCT target_char) FROM component_closure WHERE component IN ({placeholders}) AND is_direct = 0",
-        equivs,
-    )
-    transitive_total = cur.fetchone()[0]
-
-    cur = conn.execute(
-        f"""
-        SELECT
-            c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
-            c.ja_on, c.ja_kun, c.grade, c.freq,
-            cc.via_char, MIN(cc.min_depth) AS min_depth,
-            cc.target_priority
-        FROM component_closure cc
-        JOIN characters c ON cc.target_char = c.char
-        WHERE cc.component IN ({placeholders}) AND cc.is_direct = 0
-        GROUP BY c.char
-        ORDER BY
-            COALESCE(c.freq, 999999) ASC,
-            CASE WHEN c.grade IS NOT NULL THEN c.grade ELSE 999 END ASC,
-            c.sort_priority ASC,
-            CASE WHEN (c.ja_on IS NOT NULL AND c.ja_on != '') OR (c.ja_kun IS NOT NULL AND c.ja_kun != '') THEN 0 ELSE 1 END ASC,
-            min_depth ASC,
-            COALESCE(c.stroke_count, 999) ASC
-        LIMIT 150
-        """,
-        equivs,
-    )
-    trans_rows = cur.fetchall()
-    trans_list = [row_to_result_item(r, is_direct=0) for r in trans_rows]
-
+    direct = query_component_matches_db(conn, [char], mode="direct", limit=150)
+    indirect = query_component_matches_db(conn, [char], mode="indirect", limit=150)
     return {
-        "direct": direct_list,
-        "direct_total": direct_total,
-        "transitive": trans_list,
-        "transitive_total": transitive_total,
-        "indirect": trans_list,
-        "indirect_total": transitive_total,
-        "total": direct_total + transitive_total,
+        "direct": direct["results"],
+        "direct_total": direct["direct_total"],
+        "transitive": indirect["results"],
+        "transitive_total": indirect["indirect_total"],
+        "indirect": indirect["results"],
+        "indirect_total": indirect["indirect_total"],
+        "total": direct["direct_total"] + indirect["indirect_total"],
     }
 
 
@@ -1273,107 +1278,14 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='component_closure'"
                 ).fetchone()
                 if tbl_check:
-                    primary_comp = norm_components[0]
-                    primary_equivs = [primary_comp] + [
-                        eq
-                        for eq in ids_parser.EQUIV_GROUPS.get(primary_comp, [])
-                        if eq != primary_comp
-                    ]
-                    primary_ph = ", ".join(["?"] * len(primary_equivs))
-
-                    base_where_clauses: list[str] = ["1=1"]
-                    base_where_params: list[Any] = []
-
-                    # 追加構成要素 (norm_components[1:])
-                    for comp in norm_components[1:]:
-                        equivs = [comp] + [
-                            eq
-                            for eq in ids_parser.EQUIV_GROUPS.get(comp, [])
-                            if eq != comp
-                        ]
-                        ph = ", ".join(["?"] * len(equivs))
-                        base_where_clauses.append(
-                            f"c.char IN (SELECT target_char FROM component_closure WHERE component IN ({ph}))"
-                        )
-                        base_where_params.extend(equivs)
-
-                    # 区分（tier/category）及び画数フィルター
-                    f_clauses, f_params = _build_tier_and_stroke_filters(tier, min_strokes, max_strokes)
-                    base_where_clauses.extend(f_clauses)
-                    base_where_params.extend(f_params)
-
-                    base_where_sql = " AND ".join(base_where_clauses)
-
-                    # 直接・間接および基底総数の集計
-                    count_sql = f"""
-                    SELECT
-                        COUNT(*) AS base_total,
-                        COALESCE(SUM(CASE WHEN is_direct = 1 THEN 1 ELSE 0 END), 0) AS direct_total,
-                        COALESCE(SUM(CASE WHEN is_direct = 0 THEN 1 ELSE 0 END), 0) AS indirect_total
-                    FROM (
-                        SELECT c.char, MAX(cc_main.is_direct) AS is_direct
-                        FROM characters c
-                        JOIN component_closure cc_main ON cc_main.target_char = c.char AND cc_main.component IN ({primary_ph})
-                        WHERE {base_where_sql}
-                        GROUP BY c.char
+                    matches = query_component_matches_db(
+                        conn, norm_components, mode, tier, min_strokes, max_strokes, limit
                     )
-                    """
-                    count_params = list(primary_equivs) + base_where_params
-                    count_row = conn.execute(count_sql, count_params).fetchone()
-                    base_total = count_row[0] if count_row else 0
-                    direct_total = count_row[1] if count_row else 0
-                    indirect_total = count_row[2] if count_row else 0
-
-                    # 階層（mode/hierarchy）フィルターの適用
-                    query_where_clauses = list(base_where_clauses)
-                    query_where_params = list(base_where_params)
-
-                    having_sql = ""
-                    if mode == "direct":
-                        having_sql = "HAVING MAX(cc_main.is_direct) = 1"
-                        total = direct_total
-                    elif mode in ("indirect", "transitive"):
-                        having_sql = "HAVING MAX(cc_main.is_direct) = 0"
-                        total = indirect_total
-                    else:
-                        total = base_total
-
-                    query_where_sql = " AND ".join(query_where_clauses)
-
-                    query_sql = f"""
-                        SELECT
-                            c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
-                            c.ja_on, c.ja_kun, c.grade, c.freq,
-                            MAX(cc_main.is_direct) AS is_direct,
-                            cc_main.via_char,
-                            MIN(cc_main.min_depth) AS min_depth,
-                            MIN(cc_main.target_priority) AS target_priority
-                        FROM characters c
-                        JOIN component_closure cc_main ON cc_main.target_char = c.char AND cc_main.component IN ({primary_ph})
-                        WHERE {query_where_sql}
-                        GROUP BY c.char
-                        {having_sql}
-                        ORDER BY
-                            COALESCE(c.freq, 999999) ASC,
-                            CASE WHEN c.grade IS NOT NULL THEN c.grade ELSE 999 END ASC,
-                            c.sort_priority ASC,
-                            CASE WHEN (c.ja_on IS NOT NULL AND c.ja_on != '') OR (c.ja_kun IS NOT NULL AND c.ja_kun != '') THEN 0 ELSE 1 END ASC,
-                            min_depth ASC,
-                            COALESCE(c.stroke_count, 999) ASC
-                        LIMIT ?
-                    """
-                    exec_params = list(primary_equivs) + query_where_params + [limit]
-                    rows = conn.execute(query_sql, exec_params).fetchall()
-                    results = [row_to_result_item(r) for r in rows]
-
                     self._send_json_response({
                         "query": raw_query,
                         "components": norm_components,
                         "search_type": "構成要素検索",
-                        "total": total,
-                        "direct_total": direct_total,
-                        "indirect_total": indirect_total,
-                        "results": results,
+                        **matches,
                     })
                     return
             except sqlite3.Error:
