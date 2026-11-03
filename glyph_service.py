@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import bisect
+import copy
 import functools
 import glob
 import gzip
@@ -2688,15 +2689,16 @@ def _allocate_strokes_recursive(
 
     lc = ast_node.get("char") or ast_node.get("raw_char") or ""
 
-    # 特殊な交差・包含構造の筆順インターレース対応
-    # 1. 日 (4画) -> 囗 (3画: s0, s1, s3) + 一 (1画: s2)
-    if lc == "日" and len(p_strokes) == 4 and len(ch_nodes) == 2:
-        p0 = f"{lp}.0" if lp != "0" else "0.0"
-        p1 = f"{lp}.1" if lp != "0" else "0.1"
-        if not layer_strokes.get(p0):
-            layer_strokes[p0] = [p_strokes[0], p_strokes[1], p_strokes[3]]
-        if not layer_strokes.get(p1):
-            layer_strokes[p1] = [p_strokes[2]]
+    # A closed three-stroke frame is written around its contents: the two
+    # opening strokes, all interior strokes, then the closing horizontal.
+    # Use the IDS structure rather than the character name or font geometry.
+    if (ast_node.get("op") == "⿴" and len(ch_nodes) == 2
+            and (ch_nodes[0].get("char") or ch_nodes[0].get("raw_char")) in ("口", "囗")
+            and len(p_strokes) == 3 + _estimate_node_strokes(ch_nodes[1])):
+        p0 = f"{lp}.0"
+        p1 = f"{lp}.1"
+        layer_strokes[p0] = [p_strokes[0], p_strokes[1], p_strokes[-1]]
+        layer_strokes[p1] = p_strokes[2:-1]
         _allocate_strokes_recursive(p0, ch_nodes[0], layer_strokes[p0], layer_strokes)
         _allocate_strokes_recursive(p1, ch_nodes[1], layer_strokes[p1], layer_strokes)
         return
@@ -2761,9 +2763,15 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
     """
     指定漢字のKanjiVG筆画データ（全ベクターストローク）を抽出し、
     IDS構文木の各ノード・階層（path）とスマート対応付けした情報を返します。
+    入力木は変更せず、作業用の配置・インク領域を返却先の木と共有しません。
     """
     if tree is None:
         tree = ids_parser.decompose_character(char, max_depth=6, compute_bbox=True)
+
+    # Spatial fallback refines layout using print outlines. Keep that working
+    # geometry private and reset it so matching is independent of render order.
+    tree = copy.deepcopy(tree)
+    ids_parser.compute_bboxes(tree)
 
     svc = _get_default_kanjivg_service()
     if not svc:
@@ -2925,22 +2933,20 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
     interactive_svg = build_interactive_ids_svg(tree)
     layers = [l for l in interactive_svg.get("component_layers", []) if l.get("path") and l.get("path") != "0"]
 
-    def _find_ast_node_by_path(node: dict[str, Any] | None, target_path: str) -> dict[str, Any] | None:
-        if not node:
-            return None
-        if node.get("path") == target_path:
-            return node
-        for ch in node.get("children", []):
-            res = _find_ast_node_by_path(ch, target_path)
-            if res:
-                return res
-        return None
+    nodes_by_path: dict[str, dict[str, Any]] = {}
+
+    def index_nodes(node: dict[str, Any]) -> None:
+        nodes_by_path[node["path"]] = node
+        for child in node.get("children", []):
+            index_nodes(child)
+
+    index_nodes(tree)
 
     # レイヤー処理順序：浅い階層優先、同階層では複合ノード（子要素を持つもの）を優先、面積大優先
     def layer_sort_key(l: dict[str, Any]) -> tuple[int, int, float, str]:
         lp = l.get("path", "")
         depth = len(lp.split("."))
-        ast_node = _find_ast_node_by_path(tree, lp)
+        ast_node = nodes_by_path.get(lp)
         is_composite = 1 if (ast_node and ast_node.get("children")) else 2
         bbox = l.get("bbox", [0.0, 0.0, 0.0, 0.0])
         area = bbox[2] * bbox[3] if len(bbox) >= 4 else 0.0
@@ -3048,16 +3054,14 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
             layer_strokes[lp] = list(dict.fromkeys(matched_strokes))
 
     # 1.3 構成要素のストローク事前分解（親要素確定ストロークの汎用再帰配分）
-    all_target_layers = [{"path": "0", "char": char, "raw_char": char, "bbox": [0.0, 0.0, 1.0, 1.0]}] + layers
-    for l in all_target_layers:
-        lp = l.get("path", "")
+    for l in [{"path": "0"}, *layers]:
+        lp = l["path"]
         p_strokes = layer_strokes.get(lp, [])
         if not p_strokes:
             continue
-        ast_node = _find_ast_node_by_path(tree, lp)
-        if not ast_node or not ast_node.get("children"):
-            continue
-        _allocate_strokes_recursive(lp, ast_node, p_strokes, layer_strokes)
+        ast_node = nodes_by_path.get(lp)
+        if ast_node and ast_node.get("children"):
+            _allocate_strokes_recursive(lp, ast_node, p_strokes, layer_strokes)
 
     # 1.5 無名グループ（elem="" または None）の空間幾何マッチング
     for l in layers:
