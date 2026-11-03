@@ -100,3 +100,52 @@ def test_unavailable_reading_table_returns_service_unavailable(database):
                               lambda status, headers: statuses.append(status))
     assert statuses == ['503 Service Unavailable']
     assert 'error' in json.loads(b''.join(body))
+
+
+@pytest.mark.parametrize('mode,total', [('all', 3), ('direct', 2), ('indirect', 1)])
+def test_zero_limit_keeps_full_counts(database, mode, total):
+    result = server.query_component_matches_db(database, ['食'], mode=mode, limit=0)
+    assert result == {'total': total, 'direct_total': 2, 'indirect_total': 1, 'results': []}
+
+
+def test_empty_category_and_empty_match_keep_counts(database):
+    result = server.query_component_matches_db(database, ['木'], mode='indirect', min_strokes=5)
+    assert result == {'total': 0, 'direct_total': 1, 'indirect_total': 0, 'results': []}
+    usage = server.query_component_closure_db(database, '無')
+    assert usage == {'total': 0, 'direct_total': 0, 'indirect_total': 0, 'transitive_total': 0,
+                     'direct': [], 'indirect': [], 'transitive': []}
+
+
+def test_usage_has_independent_category_limits_and_complete_counts(database):
+    database.execute('DELETE FROM component_closure')
+    database.execute('DELETE FROM characters')
+    chars = [chr(0x4E00 + i) for i in range(324)]
+    database.executemany('INSERT INTO characters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+        (char, f'U+{ord(char):04X}', '基本漢字', 5, None, None, None, None, i, 1)
+        for i, char in enumerate(chars)
+    ])
+    database.executemany('INSERT INTO component_closure VALUES (?, ?, ?, ?, ?, ?)', [
+        ('食', char, i % 2, '' if i % 2 else '中', 1 if i % 2 else 2, 1)
+        for i, char in enumerate(chars)
+    ])
+    usage = server.query_component_closure_db(database, '食')
+    assert usage['total'] == 324
+    assert usage['direct_total'] == usage['indirect_total'] == 162
+    assert [item['char'] for item in usage['direct']] == chars[1:300:2]
+    assert [item['char'] for item in usage['indirect']] == chars[:300:2]
+    assert usage['transitive'] == usage['indirect']
+
+
+@pytest.mark.parametrize('usage', [False, True])
+def test_component_lookup_executes_one_ranked_statement(database, usage):
+    statements = []
+    database.set_trace_callback(statements.append)
+    try:
+        if usage:
+            server.query_component_closure_db(database, '食')
+        else:
+            server.query_component_matches_db(database, ['食'])
+    finally:
+        database.set_trace_callback(None)
+    queries = [sql for sql in statements if 'WITH ranked' in sql]
+    assert len(queries) == 1

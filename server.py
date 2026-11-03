@@ -495,6 +495,32 @@ def query_component_matches_db(
     limit: int = 120,
 ) -> dict[str, Any]:
     """同等部品を統合し、件数・分類・経由文字を同一の対象集合から返します。"""
+    counts, rows = _query_component_rows_db(
+        conn, components, mode, tier, min_strokes, max_strokes, limit
+    )
+    base_total, direct_total, indirect_total = counts
+    total = (direct_total if mode == "direct" else indirect_total
+             if mode in ("indirect", "transitive") else base_total)
+    return {
+        "total": total,
+        "direct_total": direct_total,
+        "indirect_total": indirect_total,
+        "results": [row_to_result_item(row) for row in rows],
+    }
+
+
+def _query_component_rows_db(
+    conn: sqlite3.Connection,
+    components: list[str],
+    mode: str = "all",
+    tier: str = "all",
+    min_strokes: int | None = None,
+    max_strokes: int | None = None,
+    limit: int = 120,
+    *,
+    split: bool = False,
+) -> tuple[tuple[int, int, int], list[sqlite3.Row]]:
+    """Rank once, sharing the full match set between counts and limited lists."""
     primary = components[0]
     equivs = sorted({primary, *ids_parser.EQUIV_GROUPS.get(primary, [])})
     placeholders = ", ".join("?" for _ in equivs)
@@ -508,6 +534,8 @@ def query_component_matches_db(
 
     # Pick one coherent source row per target. Direct matches take precedence;
     # indirect matches use the shortest path with a deterministic tie-break.
+    # The nontruncating LIMIT -1 in matches prevents flattening, making the
+    # multiply referenced set reusable without SQLite 3.35 MATERIALIZED syntax.
     matches_sql = f"""
         WITH ranked AS (
             SELECT cc.*, ROW_NUMBER() OVER (
@@ -524,34 +552,43 @@ def query_component_matches_db(
                    CASE WHEN r.is_direct = 1 THEN '' ELSE r.via_char END AS via_char
             FROM ranked r JOIN characters c ON c.char = r.target_char
             WHERE {where_sql}
+            LIMIT -1
         )
     """
     params = equivs + filter_params
-    counts = conn.execute(matches_sql + """
-        SELECT COUNT(*), COALESCE(SUM(is_direct), 0),
-               COALESCE(SUM(1 - is_direct), 0) FROM matches
-    """, params).fetchone()
-    base_total, direct_total, indirect_total = counts
-    if mode == "direct":
-        mode_filter, total = "WHERE is_direct = 1", direct_total
-    elif mode in ("indirect", "transitive"):
-        mode_filter, total = "WHERE is_direct = 0", indirect_total
+    order_sql = """
+        COALESCE(freq, 999999) ASC,
+        COALESCE(grade, 999) ASC, sort_priority ASC,
+        CASE WHEN COALESCE(ja_on, '') != '' OR COALESCE(ja_kun, '') != '' THEN 0 ELSE 1 END ASC,
+        min_depth ASC, COALESCE(stroke_count, 999) ASC, char ASC
+    """
+    if split:
+        # Usage needs its own limit for each category, sharing one ranked set.
+        selected_sql = f"""
+            SELECT * FROM (
+                SELECT * FROM matches WHERE is_direct = 1 ORDER BY {order_sql} LIMIT ?
+            ) UNION ALL SELECT * FROM (
+                SELECT * FROM matches WHERE is_direct = 0 ORDER BY {order_sql} LIMIT ?
+            )
+        """
+        params.extend([limit, limit])
     else:
-        mode_filter, total = "", base_total
-    rows = conn.execute(matches_sql + f"""
-        SELECT * FROM matches {mode_filter}
-        ORDER BY COALESCE(freq, 999999) ASC,
-                 COALESCE(grade, 999) ASC, sort_priority ASC,
-                 CASE WHEN COALESCE(ja_on, '') != '' OR COALESCE(ja_kun, '') != '' THEN 0 ELSE 1 END ASC,
-                 min_depth ASC, COALESCE(stroke_count, 999) ASC, char ASC
-        LIMIT ?
-    """, [*params, limit]).fetchall()
-    return {
-        "total": total,
-        "direct_total": direct_total,
-        "indirect_total": indirect_total,
-        "results": [row_to_result_item(row) for row in rows],
-    }
+        mode_filter = ("WHERE is_direct = 1" if mode == "direct" else
+                       "WHERE is_direct = 0" if mode in ("indirect", "transitive") else "")
+        selected_sql = f"SELECT * FROM matches {mode_filter} ORDER BY {order_sql} LIMIT ?"
+        params.append(limit)
+    # The aggregate supplies a row even for limit=0
+    # or an empty category; the LEFT JOIN keeps its untruncated counts available.
+    rows = conn.execute(matches_sql + f""",
+        counts AS (
+            SELECT COUNT(*) AS base_total, COALESCE(SUM(is_direct), 0) AS direct_total,
+                   COALESCE(SUM(1 - is_direct), 0) AS indirect_total FROM matches
+        ), selected AS ({selected_sql})
+        SELECT counts.*, selected.* FROM counts LEFT JOIN selected ON 1 = 1
+        ORDER BY {order_sql}
+    """, params).fetchall()
+    counts = tuple(rows[0][key] for key in ('base_total', 'direct_total', 'indirect_total'))
+    return counts, [row for row in rows if row['char'] is not None]
 
 
 @_snapshot_read
@@ -562,16 +599,18 @@ def query_component_closure_db(
     component_closure テーブルから指定文字（および同等部首・文字）を含む
     直接（direct）および間接（transitive/indirect）漢字群を取得します。
     """
-    direct = query_component_matches_db(conn, [char], mode="direct", limit=150)
-    indirect = query_component_matches_db(conn, [char], mode="indirect", limit=150)
+    counts, rows = _query_component_rows_db(conn, [char], limit=150, split=True)
+    total, direct_total, indirect_total = counts
+    direct = [row_to_result_item(row) for row in rows if row['is_direct'] == 1]
+    indirect = [row_to_result_item(row) for row in rows if row['is_direct'] == 0]
     return {
-        "direct": direct["results"],
-        "direct_total": direct["direct_total"],
-        "transitive": indirect["results"],
-        "transitive_total": indirect["indirect_total"],
-        "indirect": indirect["results"],
-        "indirect_total": indirect["indirect_total"],
-        "total": direct["direct_total"] + indirect["indirect_total"],
+        "direct": direct,
+        "direct_total": direct_total,
+        "transitive": indirect,
+        "transitive_total": indirect_total,
+        "indirect": indirect,
+        "indirect_total": indirect_total,
+        "total": total,
     }
 
 
