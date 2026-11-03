@@ -32,6 +32,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 連携モジュールの読み込み
+from component_graph import ComponentGraph
 import glyph_service
 import ids_parser
 import jp_metadata
@@ -528,42 +529,76 @@ def query_component_closure_db(
     }
 
 
+_fallback_component_index = None
+
+
+def _get_fallback_component_index():
+    """Cache a complete index per loaded IDS dictionary, never a limited result."""
+    global _fallback_component_index
+    source = ids_parser.get_ids_dict()
+    if _fallback_component_index is None or _fallback_component_index[0] is not source:
+        primary = {}
+        for char in source.keys() | ids_parser.ATOMIC_SUBDECOMPOSITIONS.keys():
+            formula = source.get(char)
+            if not formula or formula == char:
+                formula = ids_parser.ATOMIC_SUBDECOMPOSITIONS.get(char, char)
+            primary[char] = {
+                ids_parser.normalize_component(ids_parser.normalize_entity(token))
+                for token in ids_parser.tokenize_ids(formula, normalize=False)
+                if token not in ids_parser.IDC_INFO and token not in ('?', '？', '|')
+            }
+        index = ComponentGraph(primary).reverse_index(source)
+        _fallback_component_index = (source, index)
+    return _fallback_component_index
+
+
+def query_component_matches_fallback(
+    components: list[str], mode: str = "all", tier: str = "all", limit: int = 120
+) -> dict[str, Any]:
+    """Search whole IDS tokens and paths, counting before limiting the output."""
+    source, index = _get_fallback_component_index()
+    matches = {}
+    for symbol in sorted({components[0], *ids_parser.EQUIV_GROUPS.get(components[0], [])}):
+        for target, path in index.get(symbol, {}).items():
+            previous = matches.get(target)
+            if previous is None or (path.min_depth, path.via_char) < (previous.min_depth, previous.via_char):
+                matches[target] = path
+    for component in components[1:]:
+        targets = set()
+        for symbol in {component, *ids_parser.EQUIV_GROUPS.get(component, [])}:
+            targets.update(index.get(symbol, {}))
+        matches = {char: path for char, path in matches.items() if char in targets}
+    priorities = {'bmp': {1}, 'ext': {2, 4}, 'gaiji': {5}}.get(tier)
+    blocks = {char: jp_metadata.get_unicode_block_jp(char) for char in matches}
+    if priorities is not None:
+        matches = {char: path for char, path in matches.items()
+                   if blocks[char]['sort_priority'] in priorities}
+    direct_total = sum(path.is_direct for path in matches.values())
+    indirect_total = len(matches) - direct_total
+    if mode == 'direct':
+        matches = {char: path for char, path in matches.items() if path.is_direct}
+    elif mode in ('indirect', 'transitive'):
+        matches = {char: path for char, path in matches.items() if not path.is_direct}
+    ordered = sorted(matches, key=lambda char: (blocks[char]['sort_priority'], char))
+    results = [format_result_item(
+        char=char, codepoint=blocks[char]['codepoint'], tier=blocks[char]['tier'],
+        stroke_count=None, chise_ids=source[char], ja_on_list=[], ja_kun_list=[],
+        is_direct=matches[char].is_direct, min_depth=matches[char].min_depth,
+        via_char=matches[char].via_char,
+    ) for char in ordered[:limit]]
+    return {'total': len(matches), 'direct_total': direct_total,
+            'indirect_total': indirect_total, 'results': results}
+
+
 def query_component_closure_fallback(char: str) -> dict[str, Any]:
-    """DB非接続時のインメモリ走査フォールバック処理。"""
-    ids_dict = ids_parser.get_ids_dict()
-    equivs = set([char] + ids_parser.EQUIV_GROUPS.get(char, []))
-
-    matches: list[dict[str, Any]] = []
-    for target_char, ids_str in ids_dict.items():
-        if any(eq in ids_str for eq in equivs):
-            block_info = jp_metadata.get_unicode_block_jp(target_char)
-            matches.append(
-                format_result_item(
-                    char=target_char,
-                    codepoint=block_info["codepoint"],
-                    tier=block_info["tier"],
-                    stroke_count=None,
-                    chise_ids=ids_str,
-                    ja_on_list=[],
-                    ja_kun_list=[],
-                    grade=None,
-                    freq=None,
-                    is_direct=1,
-                    via_char="",
-                    min_depth=1,
-                )
-            )
-            if len(matches) >= 150:
-                break
-
+    """DB非接続時も同一の経路・件数・分類ルールを使用します。"""
+    direct = query_component_matches_fallback([char], mode="direct", limit=150)
+    indirect = query_component_matches_fallback([char], mode="indirect", limit=150)
     return {
-        "direct": matches,
-        "direct_total": len(matches),
-        "transitive": [],
-        "transitive_total": 0,
-        "indirect": [],
-        "indirect_total": 0,
-        "total": len(matches),
+        "direct": direct["results"], "direct_total": direct["direct_total"],
+        "transitive": indirect["results"], "transitive_total": indirect["indirect_total"],
+        "indirect": indirect["results"], "indirect_total": indirect["indirect_total"],
+        "total": direct["direct_total"] + indirect["indirect_total"],
     }
 
 
@@ -1217,6 +1252,9 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
 
         # 読み検索（全トークンがひらがな・カタカナの場合）
         if raw_tokens and is_all_kana:
+            if conn is None:
+                self._send_error_json("読みの検索資料を利用できません。", status=503)
+                return
             reading_term = raw_tokens[0]
             term_hira = to_hiragana(reading_term)
             term_kata = to_katakana(reading_term)
@@ -1301,43 +1339,16 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             except sqlite3.Error:
                 pass
 
-        # DB非接続時のインメモリフォールバック構成要素検索
-        ids_dict = ids_parser.get_ids_dict()
-        comp_equiv_sets = [
-            set([c] + ids_parser.EQUIV_GROUPS.get(c, [])) for c in norm_components
-        ]
-
-        matched_chars: list[dict[str, Any]] = []
-        for target_char, ids_str in ids_dict.items():
-            if all(any(eq in ids_str for eq in s) for s in comp_equiv_sets):
-                block_info = jp_metadata.get_unicode_block_jp(target_char)
-                matched_chars.append(
-                    format_result_item(
-                        char=target_char,
-                        codepoint=block_info["codepoint"],
-                        tier=block_info["tier"],
-                        stroke_count=None,
-                        chise_ids=ids_str,
-                        ja_on_list=[],
-                        ja_kun_list=[],
-                        grade=None,
-                        freq=None,
-                        is_direct=1,
-                        via_char="",
-                        min_depth=1,
-                    )
-                )
-                if len(matched_chars) >= limit:
-                    break
-
+        # Metadata-dependent filters cannot be inferred from IDS alone.
+        if tier == "joyo" or min_strokes is not None or max_strokes is not None:
+            self._send_error_json("画数・学年の検索資料を利用できません。", status=503)
+            return
+        matches = query_component_matches_fallback(norm_components, mode, tier, limit)
         self._send_json_response({
             "query": raw_query,
             "components": norm_components,
             "search_type": "構成要素検索(インメモリ)",
-            "total": len(matched_chars),
-            "direct_total": len(matched_chars),
-            "indirect_total": 0,
-            "results": matched_chars,
+            **matches,
         })
 
     def handle_api_glyph(self, params: dict[str, list[str]]) -> None:
