@@ -10,6 +10,7 @@ read-only private database and host/OS cache. By default the database is
 decompressed from tracked data/kanji_explorer.db.gz; --database uses a SQLite backup. Bootstrap intervals resample entire
 worker blocks; they are conditional on this machine, database and workload and
 assume exchangeable blocks, not independent HTTP users or independent machines.
+To recalculate intervals without timing, use --reanalyze REPORT --output REPORT.
 Historical server.py files use current supporting modules, whose hashes are
 recorded. Main has different semantics and no component-search helper; only its
 usage helper is benchmarked. Baseline/candidate outputs must match exactly.
@@ -144,8 +145,8 @@ def summarize(blocks: list[dict], bootstrap: int, seed: int) -> dict:
         if variant == 'candidate':
             ratios[f'candidate/baseline/{kind}/{char}'] = (
                 values[variant, kind, char], values['baseline', kind, char])
-        if variant == 'baseline' and ('main', kind, char) in values:
-            ratios[f'baseline/main/{kind}/{char}'] = (
+        if variant in ('baseline', 'candidate') and ('main', kind, char) in values:
+            ratios[f'{variant}/main/{kind}/{char}'] = (
                 values[variant, kind, char], values['main', kind, char])
     distributions = defaultdict(list)
     rng = random.Random(seed)
@@ -179,6 +180,7 @@ def main():
     parser.add_argument('--bootstrap', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=20261103)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--reanalyze', type=Path, help='Recompute CIs from an existing raw report without retiming')
     parser.add_argument('--worker-config', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--block', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -187,6 +189,18 @@ def main():
         return
     if args.output is None:
         parser.error('--output is required')
+    if args.reanalyze:
+        report = json.loads(args.reanalyze.read_text())
+        analysis_seed = report['metadata']['design']['bootstrap_seed']
+        report['summary'] = summarize(report['blocks'], args.bootstrap, analysis_seed)
+        report['metadata']['analysis'] = {
+            'script_sha256': sha256(Path(__file__).resolve()), 'git_head': git('rev-parse', 'HEAD'),
+            'command': sys.argv, 'bootstrap_resamples': args.bootstrap, 'bootstrap_seed': analysis_seed,
+            'performed_utc': datetime.now(timezone.utc).isoformat(),
+            'note': 'Reanalysis of existing raw worker blocks; original timing script hash and metadata preserved.'}
+        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+        print(json.dumps(report['summary'], ensure_ascii=False, indent=2))
+        return
     if min(args.blocks, args.warmup, args.repetitions, args.bootstrap) < 1:
         parser.error('blocks, warmup, repetitions and bootstrap must be positive')
     started = datetime.now(timezone.utc).isoformat()
