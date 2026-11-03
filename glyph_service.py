@@ -991,12 +991,18 @@ def _assign_ink_islands_to_tree(
             bars = [[left, a[3], right - left, b[1] - a[3]]
                     for a, b in zip(holes, holes[1:])]
             inner = children[1]
+            # 穴から得た横画はこの島の一部。再帰分配時の別の島を
+            # 残すと、新しいクリップ位置にインクが存在しない場合がある。
+            inner["_islands"] = [island]
+            inner["_has_shared_island"] = True
             inner["clip_rects"] = bars
             inner["hit_rects"] = bars
             inner["bbox"] = [left, bars[0][1], right - left,
                              bars[-1][1] + bars[-1][3] - bars[0][1]]
             if len(inner.get("children", [])) == count:
                 for child, bar in zip(inner["children"], bars):
+                    child["_islands"] = [island]
+                    child["_has_shared_island"] = True
                     child["bbox"] = list(bar)
                     child["clip_rects"] = [list(bar)]
                     child["hit_rects"] = [list(bar)]
@@ -2733,8 +2739,12 @@ def _allocate_strokes_recursive(
             c_slice = p_strokes[offset : offset + count]
             offset += count
             if repeated and layer_strokes.get(child_p) != c_slice:
+                # 新しい親の筆画内で有効な対応は保存する。包含構造の子は
+                # 逐次配分では再構築できないため、全削除してはならない。
+                slice_ids = set(c_slice)
                 for descendant in list(layer_strokes):
-                    if descendant.startswith(child_p + "."):
+                    if (descendant.startswith(child_p + ".")
+                            and not set(layer_strokes[descendant]).issubset(slice_ids)):
                         del layer_strokes[descendant]
                 layer_strokes[child_p] = c_slice
             elif not layer_strokes.get(child_p):

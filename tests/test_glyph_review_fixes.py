@@ -39,6 +39,33 @@ def test_lin_repeated_spoon_children_cover_distinct_stroke_pairs():
     assert strokes["0.0.1.0"] + strokes["0.0.1.1"] == strokes["0.0.1"]
 
 
+@pytest.mark.parametrize("char,path,count", [("曆", "0.1.1", 1), ("惧", "0.1.0.1", 2)])
+def test_refined_counter_bars_keep_the_ink_at_their_new_location(char, path, count):
+    tree = ids_parser.decompose_character(char, max_depth=6, compute_bbox=True)
+    visual = glyph_service.build_interactive_ids_svg(tree)
+    whole, masks = raster.compute_all_layer_masks(char, visual, size=512)
+    layers = {layer["path"]: layer for layer in visual["component_layers"]}
+    inner = masks[path]
+    expected = whole & raster.create_clip_mask(layers[path]["clip_rects"], size=512)
+    assert expected.sum() > 50
+    assert (inner == expected).all()
+    if count == 2:
+        bars = [masks[f"{path}.{i}"] for i in range(count)]
+        assert all(bar.sum() > 50 for bar in bars)
+        assert ((bars[0] | bars[1]) == inner).all()
+
+
+@pytest.mark.parametrize("char,prefix,start", [("弱", "0", 1), ("溺", "0.1", 4),
+                                              ("搦", "0.1", 4), ("鰯", "0.1", 12)])
+def test_repeated_enclosures_preserve_matched_bow_descendants(char, prefix, start):
+    strokes = glyph_service.extract_kanjivg_stroke_layers(char)["layer_strokes"]
+    for i in range(2):
+        first = start + i * 5
+        assert strokes[f"{prefix}.{i}.0"] == [
+            f"kvg:{ord(char):05x}-s{n}" for n in range(first, first + 3)
+        ]
+
+
 def test_ori_retains_source_group_shared_stroke():
     strokes = glyph_service.extract_kanjivg_stroke_layers("織")["layer_strokes"]
     assert set(strokes["0.1.0"]) & set(strokes["0.1.1"]) == {"kvg:07e54-s11"}
