@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 class Element {
-  constructor() { this.children = []; this.handlers = {}; this.value = ''; this.classList = {add(){}, remove(){}}; }
+  constructor() { this.children = []; this.handlers = {}; this.value = ''; this.style = {}; this.classList = {add(){}, remove(){}}; }
   set innerHTML(v) { this.html = v; this.children = []; }
   get innerHTML() { return this.html; }
   appendChild(v) { this.children.push(v); }
@@ -11,15 +11,16 @@ class Element {
 }
 const elements = new Map();
 for (const id of ['breadcrumbsTrail','btnHistoryBack','btnHistoryForward','resultsGrid', 'filterHierarchy','filterCategory', 'attrCharCodepoint','attrCodepoint','attrTierBadge','attrStrokesRadical','attrOnReadings','attrKunReadings','attrBadges','attrDictCodes','attrEquivalents']) elements.set(id,new Element());
-const context = vm.createContext({console:{warn(){}}, URLSearchParams, setTimeout, clearTimeout, document:{getElementById:id=>elements.get(id)||null, createElement:()=>new Element(),querySelectorAll:()=>[], addEventListener(){}}, window:{}, localStorage:{getItem:()=>null}});
+const context = vm.createContext({console:{warn(){}}, URLSearchParams, AbortController, setTimeout, clearTimeout, document:{getElementById:id=>elements.get(id)||null, createElement:()=>new Element(),querySelectorAll:()=>[], addEventListener(){}}, window:{}, localStorage:{getItem:()=>null}});
 const run = code => vm.runInContext(code, context);
 run(fs.readFileSync('static/app.js','utf8'));
-run(`for (const name of ['renderFindChips','updateLockControllerUI','resetHud','renderCanvas','renderStructureSelector','renderIdsTokens','renderRecursiveTree','loadWordsForCurrentKanji']) globalThis[name]=()=>{};
+run(`globalThis.actualWords=loadWordsForCurrentKanji;
+for (const name of ['renderFindChips','updateLockControllerUI','resetHud','renderCanvas','renderStructureSelector','renderIdsTokens','renderRecursiveTree','loadWordsForCurrentKanji']) globalThis[name]=()=>{};
 globalThis.actualFind=executeFindSearch; executeFindSearch=()=>{};
 globalThis.rendered=null; renderFindResults=(results, keywords)=>{rendered={results,keywords}};
 globalThis.summary=null; updateResultsSummary=(...counts)=>{summary=counts};`);
 let queue=[];
-context.fetch = () => new Promise((resolve,reject)=>queue.push({resolve,reject}));
+context.fetch = (url, options) => new Promise((resolve,reject)=>queue.push({resolve,reject,signal:options?.signal}));
 const data = char => ({meta:{char}, alternatives:[], visual:{}});
 const ok = value => ({ok:true,json:async()=>value});
 const flush = async()=>{await Promise.resolve();await Promise.resolve();};
@@ -75,5 +76,37 @@ const flush = async()=>{await Promise.resolve();await Promise.resolve();};
     assert.match(elements.get('resultsGrid').textContent,/取得できませんでした/);
     assert.deepEqual(Array.from(run('summary')),['未詳','未詳','未詳']);
   }
+  // Words share the same request-ownership contract as character and find panels.
+  for (const id of ['wordsGrid','wordsTotalBadge','wordsTotalCount','wordsTopCount','wordsHighCount','wordsModeBadge']) elements.set(id,new Element());
+  run(`globalThis.wordRender=null;renderWordsGrid=(results,char)=>{wordRender={results,char}}`);
+  const words = (char,total) => ({results:[{lemma:char}],total,summary:{top:total,high:0,direct:total}});
+  for (const change of ['character','filter']) {
+    run(`state.currentChar='日'`);
+    const oldWords=run('actualWords()');let resolveOldJson;
+    const oldResponse=queue.shift();oldResponse.resolve({ok:true,json:()=>new Promise(r=>resolveOldJson=r)});await flush();
+    if (change==='character') run(`state.currentChar='月'`);
+    else run(`state.wordsFilter.keyword='新'`);
+    const newWords=run('actualWords()');assert.equal(oldResponse.signal.aborted,true);queue.shift().resolve(ok(words('新',2)));await newWords;
+    resolveOldJson(words('旧',9));await oldWords;
+    assert.equal(run('wordRender.results[0].lemma'),'新');
+    assert.equal(elements.get('wordsTotalCount').textContent,2);
+  }
+  const obsoleteWords=run('actualWords()');const obsoleteWordResponse=queue.shift();
+  const currentWords=run('actualWords()');queue.shift().resolve(ok(words('新',3)));await currentWords;
+  obsoleteWordResponse.reject(Error('offline'));await obsoleteWords;
+  assert.equal(elements.get('wordsTotalCount').textContent,3);
+  assert.equal(run('state.wordsData.total'),3);
+  // Independent panel scopes must not cancel one another.
+  const concurrentFind=run('actualFind()');const findResponse=queue.shift();
+  const concurrentWords=run('actualWords()');const wordsResponse=queue.shift();
+  assert.equal(findResponse.signal.aborted,false);
+  wordsResponse.resolve(ok(words('同時',4)));await concurrentWords;
+  findResponse.resolve(ok({results:[{char:'林'}],total:1,direct_total:1,indirect_total:0}));await concurrentFind;
+  assert.equal(run('rendered.results[0].char'),'林');
+  const unavailableWords=run('actualWords()');queue.shift().resolve({ok:false});await unavailableWords;
+  assert.equal(run('state.wordsData'),null);
+  assert.equal(elements.get('wordsTotalCount').textContent,'未詳');
+  assert.equal(elements.get('wordsModeBadge').style.display,'none');
+  assert.match(elements.get('wordsGrid').innerHTML,/失敗/);
   console.log('Frontend review regressions passed');
 })().catch(error=>{console.error(error);process.exitCode=1});

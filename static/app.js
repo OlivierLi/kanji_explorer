@@ -33,8 +33,6 @@ const IDC_OPERATORS = {
 // =============================================================================
 
 const state = {
-  charRequestGeneration: 0,
-  findRequestGeneration: 0,
   currentChar: "中",
   history: ["中"],
   historyIndex: 0,
@@ -55,6 +53,27 @@ const state = {
   },
   theme: (typeof localStorage !== "undefined" && localStorage.getItem("kanji_theme")) || "light"
 };
+
+// Each panel owns one request scope. Aborting saves work; the identity check
+// also rejects stale completions when cancellation arrives too late.
+function createRequestScope() {
+  let current = null;
+  return {
+    begin() {
+      if (current) current.abort();
+      const controller = new AbortController();
+      current = controller;
+      return {
+        signal: controller.signal,
+        isCurrent: () => current === controller && !controller.signal.aborted
+      };
+    }
+  };
+}
+
+const characterRequests = createRequestScope();
+const findRequests = createRequestScope();
+const wordsRequests = createRequestScope();
 
 /**
  * HTML/SVG属性値のエスケープ
@@ -139,7 +158,7 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   const token = charOrToken.trim();
   if (!token) return;
 
-  const requestGeneration = ++state.charRequestGeneration;
+  const request = characterRequests.begin();
 
   const idcRegex = /^[⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿]/;
   const isCodepoint = /^(?:[Uu][\+\s]|0[xX])?[0-9a-fA-F]{4,6}$/.test(token);
@@ -183,17 +202,17 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   let data = null;
   try {
     const queryUrl = `/api/char?q=${encodeURIComponent(effectiveToken)}${altIds ? '&alt_ids=' + encodeURIComponent(altIds) : ''}`;
-    const response = await fetch(queryUrl);
+    const response = await fetch(queryUrl, { signal: request.signal });
     if (response.ok) {
       data = await response.json();
     }
   } catch (err) {
-    if (requestGeneration !== state.charRequestGeneration) return;
+    if (!request.isCurrent()) return;
     console.warn("文字情報を取得できませんでした:", err);
   }
 
   // JSON解析中に開始された新しい調査も優先する。
-  if (requestGeneration !== state.charRequestGeneration) return;
+  if (!request.isCurrent()) return;
   if (!data) {
     data = {
       unavailable: true,
@@ -3374,7 +3393,7 @@ function renderFindChips() {
  * 逆引き検索の実行（CHISE ids-find）
  */
 async function executeFindSearch() {
-  const requestGeneration = ++state.findRequestGeneration;
+  const request = findRequests.begin();
   const resultsGrid = document.getElementById("resultsGrid");
   if (!resultsGrid) return;
 
@@ -3410,7 +3429,7 @@ async function executeFindSearch() {
     if (minStroke > 0) params.set("min_strokes", String(minStroke));
     if (maxStroke < 999) params.set("max_strokes", String(maxStroke));
 
-    const res = await fetch(`/api/ids-find?${params.toString()}`);
+    const res = await fetch(`/api/ids-find?${params.toString()}`, { signal: request.signal });
     if (!res.ok) throw new Error("逆引き検索の取得失敗");
     if (res.ok) {
       const data = await res.json();
@@ -3428,14 +3447,14 @@ async function executeFindSearch() {
       }
     }
   } catch (e) {
-    if (requestGeneration !== state.findRequestGeneration) return;
+    if (!request.isCurrent()) return;
     console.warn("逆引き検索結果を取得できませんでした:", e);
     resultsGrid.textContent = "逆引き検索結果を取得できませんでした。再度検索してください。";
     updateResultsSummary("未詳", "未詳", "未詳");
     return;
   }
 
-  if (requestGeneration !== state.findRequestGeneration) return;
+  if (!request.isCurrent()) return;
 
   updateResultsSummary(totalCount, directCount, indirectCount);
   renderFindResults(results, chipsArray);
@@ -3610,8 +3629,6 @@ function updateResultsSummary(total, direct, indirect) {
 // 7.5 収録熟語・語彙検索（第4カラム）
 // =============================================================================
 
-let wordsAbortController = null;
-
 async function loadWordsForCurrentKanji() {
   const wordsGrid = document.getElementById("wordsGrid");
   const wordsTotalBadge = document.getElementById("wordsTotalBadge");
@@ -3622,10 +3639,7 @@ async function loadWordsForCurrentKanji() {
   const targetKanji = state.currentChar;
   if (!targetKanji) return;
 
-  if (wordsAbortController) {
-    wordsAbortController.abort();
-  }
-  wordsAbortController = new AbortController();
+  const request = wordsRequests.begin();
 
   if (wordsGrid) {
     wordsGrid.innerHTML = `
@@ -3644,11 +3658,12 @@ async function loadWordsForCurrentKanji() {
   const url = `/api/words?kanji=${encodeURIComponent(targetKanji)}&scope=${encodeURIComponent(scopeFilter)}&position=${encodeURIComponent(posFilter)}&tier=${encodeURIComponent(tierFilter)}&keyword=${encodeURIComponent(keyword)}&limit=100`;
 
   try {
-    const res = await fetch(url, { signal: wordsAbortController.signal });
+    const res = await fetch(url, { signal: request.signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status}`);
     }
     const data = await res.json();
+    if (!request.isCurrent()) return;
     state.wordsData = data;
 
     const total = data.total || 0;
@@ -3683,7 +3698,14 @@ async function loadWordsForCurrentKanji() {
 
     renderWordsGrid(data.results || [], targetKanji, isComponent);
   } catch (err) {
-    if (err.name === "AbortError") return;
+    if (!request.isCurrent()) return;
+    state.wordsData = null;
+    if (wordsTotalBadge) wordsTotalBadge.textContent = "未詳";
+    for (const count of [wordsTotalCount, wordsTopCount, wordsHighCount]) {
+      if (count) count.textContent = "未詳";
+    }
+    const modeBadge = document.getElementById("wordsModeBadge");
+    if (modeBadge) modeBadge.style.display = "none";
     if (wordsGrid) {
       wordsGrid.innerHTML = `
         <div class="state-message">
