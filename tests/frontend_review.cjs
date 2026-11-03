@@ -20,7 +20,7 @@ globalThis.actualFind=executeFindSearch; executeFindSearch=()=>{};
 globalThis.rendered=null; renderFindResults=(results, keywords)=>{rendered={results,keywords}};
 globalThis.summary=null; updateResultsSummary=(...counts)=>{summary=counts};`);
 let queue=[];
-context.fetch = (url, options) => new Promise((resolve,reject)=>queue.push({resolve,reject,signal:options?.signal}));
+context.fetch = (url, options) => new Promise((resolve,reject)=>queue.push({resolve,reject,url,signal:options?.signal}));
 const data = char => ({meta:{char}, alternatives:[], visual:{}});
 const ok = value => ({ok:true,json:async()=>value});
 const flush = async()=>{await Promise.resolve();await Promise.resolve();};
@@ -56,6 +56,12 @@ const flush = async()=>{await Promise.resolve();await Promise.resolve();};
     context.failedQuery=query;
     const p=run('inspectCharacter(failedQuery)');queue.shift().resolve({ok:false});await p;
     assert.equal(elements.get('attrCodepoint').textContent,'未詳');
+  }
+  for (const query of ['U+41','u2d544','U+110000','U+ZZZZ','0x110000']) {
+    context.notation=query;
+    const p=run('inspectCharacter(notation)');const response=queue.shift();
+    assert.equal(new URLSearchParams(response.url.split('?')[1]).get('q'),query);
+    response.resolve({ok:false});await p;
   }
   const failed=run(`inspectCharacter('月')`);queue.shift().reject(Error('offline'));await failed;assert.equal(run('state.charData.unavailable'),true);
   // Reverse lookup owns an independent generation, including delayed JSON and clear.

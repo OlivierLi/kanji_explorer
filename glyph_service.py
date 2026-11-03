@@ -1185,6 +1185,8 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
     token_clean = token.strip()
     if not token_clean:
         return ""
+    token_clean = (ids_parser.resolve_codepoint_notation(token_clean)
+                   or ids_parser.resolve_entity_notation(token_clean) or token_clean)
 
     # 1. 単一文字または正規化エンティティがJigmoフォントで描画可能な場合
     path_d = get_jigmo_path(token_clean) or get_jigmo_path(ids_parser.normalize_entity(token_clean))
@@ -2383,17 +2385,11 @@ class KanjiVGService:
         token = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", token)
         if len(token) == 1:
             return f"{ord(token):05x}"
-        if token.upper().startswith("U+"):
-            try:
-                return f"{int(token[2:], 16):05x}"
-            except ValueError:
-                return token.lower()
-        if re.match(r"^[0-9a-fA-F]{4,6}$", token):
-            try:
-                return f"{int(token, 16):05x}"
-            except ValueError:
-                return token.lower()
-        return token.lower()
+        try:
+            resolved = ids_parser.resolve_codepoint_notation(token)
+        except ValueError:
+            return token.lower()
+        return f"{ord(resolved):05x}" if resolved is not None else token.lower()
 
     def get_kanji_xml(self, char_or_hex: str) -> str | None:
         """指定された文字または16進コードの <kanji> XML 文字列を取得します。"""

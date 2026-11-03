@@ -161,7 +161,8 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   const request = characterRequests.begin();
 
   const idcRegex = /^[⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿]/;
-  const isCodepoint = /^(?:[Uu][\+\s]|0[xX])?[0-9a-fA-F]{4,6}$/.test(token);
+  const isCodepoint = /^(?:[Uu][+\s]|0[xX])/.test(token)
+    || /^(?:[Uu][0-9a-fA-F]{1,6}|[0-9a-fA-F]{4,6})$/.test(token);
   const isEntity = /^&[0-9A-Za-z_-]+;?$/.test(token) || /^(?:CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-/i.test(token);
   const isIdc = idcRegex.test(token);
 

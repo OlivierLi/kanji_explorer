@@ -117,26 +117,15 @@ def resolve_query(query: str) -> tuple[str, str]:
     if q == "⺍":
         return "𭕄", "⺍"
 
-    # 2. コードポイント表記 (U+86CD, U 86CD, 0x86cd 等)
-    m_cp = re.match(r"^(?:[Uu][\+\s]|0[xX])([0-9a-fA-F]+)$", q)
-    if not m_cp and re.match(r"^[0-9a-fA-F]{4,6}$", q) and not q.startswith("&"):
-        m_cp = re.match(r"^([0-9a-fA-F]+)$", q)
-
-    if m_cp:
-        try:
-            val = int(m_cp.group(1), 16)
-            char = chr(val)
-            norm_char = "𭕄" if char == "⺍" else char
-            return norm_char, char
-        except (ValueError, OverflowError):
-            pass
-
-    # 3. CHISE実体参照
-    if q.startswith("&") and q.endswith(";"):
-        return q, q
-    if re.match(r"^(?:CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-[0-9A-Za-z]+'?$", q):
-        entity = f"&{q};"
-        return entity, q
+    try:
+        char = ids_parser.resolve_codepoint_notation(q)
+        if char is not None:
+            return ("𭕄" if char == "⺍" else char), char
+        entity = ids_parser.resolve_entity_notation(q)
+        if entity is not None:
+            return entity, q
+    except ValueError:
+        return "", q
 
     # 4. 複数文字入力の処理（IDC演算子で始まらない通常の複数文字文字列の場合は先頭1文字を採用）
     idc_operators = set("⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿")
@@ -1120,9 +1109,13 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             else:
                 primary_ids = db_chise_ids
 
-        tree = ids_parser.decompose_character(
-            primary_ids, max_depth=8, use_atomic=True, compute_bbox=True
-        )
+        try:
+            tree = ids_parser.decompose_character(
+                primary_ids, max_depth=8, use_atomic=True, compute_bbox=True
+            )
+        except ValueError:
+            self._send_error_json("指定された構造を解釈できませんでした。", status=400)
+            return
         tree["char"] = canonical_char
 
         # 全ノードへのメタデータ再帰付与
@@ -1248,6 +1241,9 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         is_all_kana = True
         for t in raw_tokens:
             norm_c, _ = resolve_query(t)
+            if not norm_c:
+                self._send_error_json("検索条件を解決できませんでした。", status=400)
+                return
             norm_c = ids_parser.normalize_component(ids_parser.normalize_entity(norm_c))
             norm_components.append(norm_c)
             if not re.match(r"^[\u3040-\u309F\u30A0-\u30FF\u30FC]+$", t):
@@ -1364,8 +1360,10 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             return
 
         canonical_token, _ = resolve_query(token)
-        target_token = canonical_token if canonical_token else token
-        svg_content = glyph_service.get_glyph_svg(target_token)
+        if not canonical_token:
+            self._send_error_json("指定された文字を解決できませんでした。", status=400)
+            return
+        svg_content = glyph_service.get_glyph_svg(canonical_token)
         svg_bytes = svg_content.encode("utf-8")
 
         self.send_response(200)
@@ -1447,7 +1445,8 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         raw_char = raw_char.strip()
         canonical_char, requested_char = resolve_query(raw_char)
         if not canonical_char:
-            canonical_char = "名"
+            self._send_error_json("指定された文字を解決できませんでした。", status=400)
+            return
 
         # 1. データベース検索 & 前後の常用漢字取得
         conn = get_db_connection()

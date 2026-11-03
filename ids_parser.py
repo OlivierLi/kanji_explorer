@@ -1840,6 +1840,41 @@ def expand_tree(
     return ast_node
 
 
+def resolve_codepoint_notation(token: str) -> str | None:
+    """Resolve Unicode scalar notation; distinguish invalid notation from text."""
+    token = token.strip()
+    match = re.fullmatch(r"(?:[Uu](?:\+|\s+)?|0[xX])([0-9a-fA-F]+)", token)
+    if match is None:
+        match = re.fullmatch(r"([0-9a-fA-F]{4,6})", token)
+    if match is None:
+        if re.match(r"^(?:[Uu][+\s]|0[xX])", token):
+            raise ValueError(f"不正なコードポイント表記: {token}")
+        return None
+    value = int(match.group(1), 16)
+    if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+        raise ValueError(f"Unicode文字の範囲外です: {token}")
+    return chr(value)
+
+
+def resolve_entity_notation(token: str) -> str | None:
+    """Accept bare/wrapped CHISE names without truncating them into letters."""
+    token = token.strip()
+    wrapped = token.startswith('&') and len(token) > 1
+    body = token[1:].removesuffix(';') if wrapped else token
+    match = re.fullmatch(r"(CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-(.+)", body, re.I)
+    if not wrapped and match is None:
+        return None
+    if not body or any(char.isspace() for char in body):
+        raise ValueError(f"不正な実体参照表記: {token}")
+    if match is not None:
+        prefix, suffix = match.groups()
+        # Keep variant markers such as v001/i001; normalize hexadecimal fields.
+        parts = [part.upper() if re.fullmatch(r"[0-9a-fA-F]{4,6}", part) else part
+                 for part in suffix.split('-')]
+        body = prefix.upper() + '-' + '-'.join(parts)
+    return '&' + body + ';'
+
+
 def decompose_character(
     char_or_ids: str,
     ids_dict: dict[str, str] | None = None,
@@ -1852,13 +1887,9 @@ def decompose_character(
     clean_input, region_tags = extract_region_tags(char_or_ids)
     clean_input = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", clean_input)
 
-    # U+XXXX または 0xXXXX コードポイント表記の解決
-    m_cp = re.match(r"^(?:[Uu]\+|0[xX])([0-9a-fA-F]+)$", clean_input.strip())
-    if m_cp:
-        try:
-            clean_input = chr(int(m_cp.group(1), 16))
-        except (ValueError, OverflowError):
-            pass
+    resolved = resolve_codepoint_notation(clean_input) or resolve_entity_notation(clean_input)
+    if resolved is not None:
+        clean_input = resolved
 
     is_single = len(clean_input) == 1 or (
         clean_input.startswith("&") and clean_input.endswith(";")
