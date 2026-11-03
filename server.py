@@ -33,7 +33,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 連携モジュールの読み込み
-from component_graph import ComponentGraph
+from component_graph import ComponentGraph, ComponentPath
 import glyph_service
 import ids_parser
 import jp_metadata
@@ -575,10 +575,11 @@ def query_component_closure_db(
     }
 
 
-_fallback_component_index = None
+_ComponentIndex = tuple[dict[str, str], dict[str, dict[str, ComponentPath]]]
+_fallback_component_index: _ComponentIndex | None = None
 
 
-def _get_fallback_component_index():
+def _get_fallback_component_index() -> _ComponentIndex:
     """Cache a complete index per loaded IDS dictionary, never a limited result."""
     global _fallback_component_index
     source = ids_parser.get_ids_dict()
@@ -880,6 +881,11 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
 
     server_version = "KanjiExplorerServer/1.0"
 
+    def _write_body(self, body: bytes) -> None:
+        """All transports share HEAD semantics; headers keep the GET length."""
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def _send_json_response(
         self, data: Any, status: int = 200, cache_age: int = 0
     ) -> None:
@@ -894,7 +900,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         else:
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        self.wfile.write(body)
+        self._write_body(body)
 
     def _send_error_json(self, message: str, status: int = 400) -> None:
         """エラーメッセージをJSON形式で返却します。"""
@@ -904,7 +910,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         """CORSプリフライトリクエストに対応します。"""
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -982,7 +988,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(content)))
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                self.wfile.write(content)
+                self._write_body(content)
                 return
             except OSError:
                 pass
@@ -1012,7 +1018,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(fallback_html)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(fallback_html)
+        self._write_body(fallback_html)
 
     def handle_static(self, subpath: str) -> None:
         """GET /static/<path> -> 静的ファイルを配信。"""
@@ -1107,7 +1113,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
                     chunk = f.read(65536)
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
+                    self._write_body(chunk)
         except (BrokenPipeError, ConnectionResetError):
             return
         except OSError:
@@ -1388,7 +1394,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(svg_bytes)
+        self._write_body(svg_bytes)
 
     def handle_api_words(self, params: dict[str, list[str]]) -> None:
         """GET /api/words を処理。提示漢字を含む熟語・語彙の頻度順検索。"""
@@ -1510,7 +1516,7 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content_bytes)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(content_bytes)
+        self._write_body(content_bytes)
 
 
 class WSGIHandlerAdapter(KanjiExplorerHandler):

@@ -904,6 +904,7 @@ class TestBugApiGlyphCodepointAndParam:
 
     def test_api_glyph_resolves_codepoint_and_q(self):
         handler = server.KanjiExplorerHandler.__new__(server.KanjiExplorerHandler)
+        handler.command = "GET"
 
         # U+86CD (蛍) のコードポイント表記指定
         handler.send_response = lambda code: None
