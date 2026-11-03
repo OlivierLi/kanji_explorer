@@ -416,7 +416,8 @@ def check_oracle_b(
 
             parent_p = l_path.rsplit(".", 1)[0] if "." in l_path else "0"
             parent_node = node_by_path.get(parent_p)
-            parent_bbox = parent_node.get("bbox", [0.0, 0.0, 1.0, 1.0]) if parent_node else [0.0, 0.0, 1.0, 1.0]
+            parent_geometry = layers_by_path.get(parent_p, {})
+            parent_bbox = parent_geometry.get("bbox", [0.0, 0.0, 1.0, 1.0])
             if parent_p == "0":
                 py_start = 0.02
                 py_end = 0.98
@@ -587,10 +588,10 @@ def check_oracle_b(
                     if ov >= ipix * 0.08:
                         if lf_info["under_overlay"]:
                             has_overlay_leaf = True
-                        lighting_leaves.append((lp, lf.get("char", ""), ov, ov / ipix, lf))
+                        lighting_leaves.append((lp, lf.get("char", ""), ov, ov / ipix))
 
             if len(lighting_leaves) >= 2 and not has_overlay_leaf:
-                has_shared_by_design = all(item[4].get("_has_shared_island") for item in lighting_leaves)
+                has_shared_by_design = all(layers_by_path.get(item[0], {}).get("has_shared_island", False) for item in lighting_leaves)
                 if not has_shared_by_design:
                     max_share = max(x[3] for x in lighting_leaves)
                     if max_share < 0.90:

@@ -1149,6 +1149,7 @@ def build_interactive_ids_svg(tree_node: dict[str, Any]) -> dict[str, Any]:
                 "svg_transform": svg_transform,
                 "slice_path": slice_path,
                 "needs_clip": needs_clip,
+                "has_shared_island": bool(child.get("_has_shared_island", False)),
             })
             traverse(child, depth + 1, c_path)
 
