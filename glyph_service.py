@@ -1085,7 +1085,9 @@ def build_interactive_ids_svg(tree_node: dict[str, Any]) -> dict[str, Any]:
     """
     KanjiVG未収録文字や拡張領域文字を含む任意の漢字構成木から、
     ホバーやドリルダウンが可能なインタラクティブ複合SVGデータ構造を生成します。
+    解析木は変更せず、フォント固有の配置とインク島は返却レイヤーだけに保持します。
     """
+    tree_node = copy.deepcopy(tree_node)
     root_char = tree_node.get("char") or tree_node.get("raw_char") or _infer_char_from_children(tree_node)
     base_path = get_jigmo_path(root_char)
     if not base_path and root_char:

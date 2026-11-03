@@ -65,3 +65,15 @@ def test_closed_frames_follow_source_stroke_order(char, last):
     assert set(strokes['0.0']).isdisjoint(strokes['0.1'])
     assert set(strokes['0.0'] + strokes['0.1']) == set(strokes['0'])
 
+
+@pytest.mark.parametrize('char', list('突斯怨舎茨溢眞究灸雰葡欺恩瀧忽想雪霊沖仲'))
+def test_print_rendering_is_repeatable_and_does_not_mutate_structure(char):
+    tree = ids_parser.decompose_character(char, max_depth=6, compute_bbox=True)
+    original = copy.deepcopy(tree)
+    first = glyph_service.build_interactive_ids_svg(tree)
+    assert tree == original
+    assert glyph_service.build_interactive_ids_svg(tree) == first
+    # Returned geometry must not alias the parsed tree or later render results.
+    first['component_layers'][0]['bbox'][0] = -100
+    assert tree == original
+    assert glyph_service.build_interactive_ids_svg(tree) != first
