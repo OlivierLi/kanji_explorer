@@ -29,6 +29,7 @@ from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.ttLib import TTFont
 
 import ids_parser
+from geometry import clip_polygon_area, contains_polygon
 
 # パス定義
 BASE_DIR = Path(__file__).resolve().parent
@@ -497,10 +498,13 @@ def _extract_ink_islands(base_path: str) -> list[dict[str, Any]]:
             "x2": x2,
             "y2": y2,
             "area": (x2 - x1) * (y2 - y1),
+            "polygon": [(x / 1024.0, y / 1024.0) for x, y in pts],
+            "is_linear": re.search(r"[QqCcSsTtAa]", c) is None,
         }
         if a >= 0:
             item["holes"] = []
             item["hole_boxes"] = []
+            item["hole_polygons"] = []
             outers.append(item)
         else:
             holes.append(item)
@@ -509,16 +513,20 @@ def _extract_ink_islands(base_path: str) -> list[dict[str, Any]]:
         candidates = []
         for o in outers:
             if o["x1"] - 8 <= h["x1"] and h["x2"] <= o["x2"] + 8 and o["y1"] - 8 <= h["y1"] and h["y2"] <= o["y2"] + 8:
-                candidates.append(o)
+                if (not h["is_linear"] or not o["is_linear"]
+                        or contains_polygon(o["polygon"], h["polygon"])):
+                    candidates.append(o)
         hbox = [round(h["x1"] / 1024.0, 4), round(h["y1"] / 1024.0, 4), round(h["x2"] / 1024.0, 4), round(h["y2"] / 1024.0, 4)]
         if candidates:
             best = min(candidates, key=lambda c: c["area"])
             best["holes"].append(h["d"])
             best["hole_boxes"].append(hbox)
+            best["hole_polygons"].append(h["polygon"])
         else:
             if outers:
                 outers[0]["holes"].append(h["d"])
                 outers[0]["hole_boxes"].append(hbox)
+                outers[0]["hole_polygons"].append(h["polygon"])
 
     islands: list[dict[str, Any]] = []
     for i, o in enumerate(outers):
@@ -539,8 +547,28 @@ def _extract_ink_islands(base_path: str) -> list[dict[str, Any]]:
             "w": round(x2 - x1, 4),
             "h": round(y2 - y1, 4),
             "hole_boxes": o["hole_boxes"],
+            "polygon": o["polygon"],
+            "hole_polygons": o["hole_polygons"],
+            "is_linear": re.search(r"[QqCcSsTtAa]", d_full) is None,
         })
     return islands
+
+
+def _island_intersects_clips(island: dict[str, Any], clips: list[list[float]]) -> bool:
+    # Control polygons do not describe curved ink exactly. Preserve those
+    # assignments rather than declaring a curved stroke empty from an estimate.
+    if not island["is_linear"]:
+        return True
+    for rect in clips:
+        x, y, w, h = rect
+        if (x + w <= island['x1'] or x >= island['x2']
+                or y + h <= island['y1'] or y >= island['y2']):
+            continue
+        area = clip_polygon_area(island['polygon'], rect)
+        area -= sum(clip_polygon_area(hole, rect) for hole in island['hole_polygons'])
+        if area > 1e-10:
+            return True
+    return False
 
 
 def _expected_min_islands(node: dict[str, Any]) -> int:
@@ -1139,6 +1167,16 @@ def build_interactive_ids_svg(tree_node: dict[str, Any]) -> dict[str, Any]:
                     if sw > w + 0.30 or sh > h + 0.30:
                         needs_clip = True
 
+            has_shared_island = bool(child.get("_has_shared_island", False))
+            if (needs_clip and child_islands
+                    and not any(_island_intersects_clips(ink, c_clip_rects) for ink in child_islands)):
+                # A bounding-box match may contain no ink in this clip (for
+                # example, a concave stroke or a counter). The complete outline
+                # is the authoritative fallback: it also preserves winding when
+                # a slice's hole contours were attached to the wrong island.
+                slice_path = base_path or ""
+                has_shared_island = True
+
             svg_p = get_jigmo_path(c_char)
             if not svg_p and c_char:
                 norm_c = ids_parser.normalize_entity(c_char)
@@ -1165,7 +1203,7 @@ def build_interactive_ids_svg(tree_node: dict[str, Any]) -> dict[str, Any]:
                 "svg_transform": svg_transform,
                 "slice_path": slice_path,
                 "needs_clip": needs_clip,
-                "has_shared_island": bool(child.get("_has_shared_island", False)),
+                "has_shared_island": has_shared_island,
             })
             traverse(child, depth + 1, c_path)
 
