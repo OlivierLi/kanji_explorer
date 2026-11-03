@@ -23,6 +23,7 @@ import sqlite3
 import threading
 from typing import Any
 import xml.etree.ElementTree as ET
+import zlib
 
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.ttLib import TTFont
@@ -293,48 +294,52 @@ class _JigmoFontManager:
                 for font, _ in loaded:
                     font.close()
                 raise
-            self._faces = tuple(loaded)
+            if loaded:
+                self._faces = tuple(loaded)
 
-    @functools.lru_cache(maxsize=16384)
     def get_path(self, char: str) -> str | None:
-        """単一のUnicode文字のベクターアウトライン（SVG pathのd属性）を返します。"""
+        """単一文字のアウトラインを返し、未利用のフォント資料はキャッシュしません。"""
         if not char:
             return None
         with self._lock:
             self._ensure_loaded()
             if not self._faces:
                 return None
+            return self._get_loaded_path(char)
 
-            # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
-            char_clean = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", char)
-            if not char_clean:
-                return None
-
-            # ⺍ の場合は 𭕄 (U+2D544) へのフォールバックも考慮
-            candidates = [char_clean]
-            if char_clean == "⺍":
-                candidates.append("𭕄")
-            elif char_clean == "𭕄":
-                candidates.append("⺍")
-
-            for c in candidates:
-                try:
-                    codepoint = ord(c)
-                except TypeError:
-                    continue
-
-                for font, cmap in self._faces:
-                    if codepoint in cmap:
-                        glyph_name = cmap[codepoint]
-                        glyph_set = font.getGlyphSet()
-                        pen = SVGPathPen(glyph_set)
-                        glyph = glyph_set[glyph_name]
-                        glyph.draw(pen)
-                        commands = pen.getCommands()
-                        if commands:
-                            return commands
-
+    @functools.lru_cache(maxsize=16384)
+    def _get_loaded_path(self, char: str) -> str | None:
+        # Called under the manager lock, only after a valid font snapshot exists.
+        # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
+        char_clean = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", char)
+        if not char_clean:
             return None
+
+        # ⺍ の場合は 𭕄 (U+2D544) へのフォールバックも考慮
+        candidates = [char_clean]
+        if char_clean == "⺍":
+            candidates.append("𭕄")
+        elif char_clean == "𭕄":
+            candidates.append("⺍")
+
+        for c in candidates:
+            try:
+                codepoint = ord(c)
+            except TypeError:
+                continue
+
+            for font, cmap in self._faces:
+                if codepoint in cmap:
+                    glyph_name = cmap[codepoint]
+                    glyph_set = font.getGlyphSet()
+                    pen = SVGPathPen(glyph_set)
+                    glyph = glyph_set[glyph_name]
+                    glyph.draw(pen)
+                    commands = pen.getCommands()
+                    if commands:
+                        return commands
+
+        return None
 
 
 # シングルトンフォントマネージャ
@@ -2337,42 +2342,39 @@ class KanjiVGService:
         return self._reverse_chise
 
     def _ensure_kanjivg_loaded(self) -> None:
-        """kanjivg.xml.gz を読み込み、16進コードポイントからXMLブロックへの索引を作成します。"""
+        """kanjivg.xml.gz の読み込みに成功した完全な索引だけを公開します。"""
         if self._kanji_index is not None:
             return
-
+        try:
+            with gzip.open(self.kanjivg_path, "rt", encoding="utf-8") as source:
+                xml_text = source.read()
+        except (OSError, EOFError, zlib.error, UnicodeError):
+            return
         index: dict[str, str] = {}
-        if self.kanjivg_path.is_file():
-            try:
-                with gzip.open(self.kanjivg_path, "rt", encoding="utf-8") as f:
-                    xml_text = f.read()
+        # <kanji id="kvg:kanji_086cd">...</kanji> の抽出
+        start_marker = "<kanji "
+        end_marker = "</kanji>"
+        pos = 0
+        while True:
+            start_pos = xml_text.find(start_marker, pos)
+            if start_pos == -1:
+                break
+            end_pos = xml_text.find(end_marker, start_pos)
+            if end_pos == -1:
+                break
+            block = xml_text[start_pos : end_pos + len(end_marker)]
+            pos = end_pos + len(end_marker)
 
-                # <kanji id="kvg:kanji_086cd">...</kanji> の抽出
-                start_marker = "<kanji "
-                end_marker = "</kanji>"
-                pos = 0
-                while True:
-                    start_pos = xml_text.find(start_marker, pos)
-                    if start_pos == -1:
-                        break
-                    end_pos = xml_text.find(end_marker, start_pos)
-                    if end_pos == -1:
-                        break
-                    block = xml_text[start_pos : end_pos + len(end_marker)]
-                    pos = end_pos + len(end_marker)
-
-                    # id 属性から 16 進コードポイントを取得
-                    id_idx = block.find('id="kvg:kanji_')
-                    if id_idx != -1:
-                        val_start = id_idx + len('id="kvg:kanji_')
-                        val_end = block.find('"', val_start)
-                        if val_end != -1:
-                            hex_code = block[val_start:val_end].lower()
-                            index[hex_code] = block
-            except OSError:
-                pass
-
-        self._kanji_index = index
+            # id 属性から 16 進コードポイントを取得
+            id_idx = block.find('id="kvg:kanji_')
+            if id_idx != -1:
+                val_start = id_idx + len('id="kvg:kanji_')
+                val_end = block.find('"', val_start)
+                if val_end != -1:
+                    hex_code = block[val_start:val_end].lower()
+                    index[hex_code] = block
+        if index:
+            self._kanji_index = index
 
     def _normalize_codepoint_hex(self, char_or_hex: str) -> str:
         """文字または16進文字列を KanjiVG 形式の小文字16進数（例: '086cd'）に正規化します。"""
