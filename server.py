@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import email.utils
-import functools
+import copy
 import gzip
 import json
 import mimetypes
@@ -80,7 +80,7 @@ def get_db_connection() -> sqlite3.Connection | None:
     if conn is None:
         try:
             # 読み込み専用URI接続でオープン（ロック競合を防止）
-            conn = sqlite3.connect(f"file:{DB_PATH.resolve()}?mode=ro", uri=True)
+            conn = sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             _thread_local.conn = conn
         except sqlite3.Error:
@@ -173,7 +173,6 @@ def split_csv_field(val: Any) -> list[str]:
     return [s.strip() for s in val.split(",") if s.strip()]
 
 
-@functools.lru_cache(maxsize=10000)
 def get_meta_summary(char: str) -> dict[str, Any]:
     """
     指定された文字の簡易メタデータを返します（木構造ノードの meta_summary 用）。
@@ -329,12 +328,19 @@ def row_to_meta(row: sqlite3.Row, requested_char: str) -> dict[str, Any]:
 
 
 def enrich_tree_with_meta(node: dict[str, Any]) -> None:
-    """再帰木の全ノードに対して meta_summary を付与します。"""
-    char = node.get("char")
-    if char:
-        node["meta_summary"] = get_meta_summary(char)
-    for child in node.get("children", []):
-        enrich_tree_with_meta(child)
+    """同一リクエスト内で読みを共有取得し、各ノードには独立した情報を付与します。"""
+    summaries: dict[str, dict[str, Any]] = {}
+
+    def enrich(current: dict[str, Any]) -> None:
+        char = current.get("char")
+        if char:
+            if char not in summaries:
+                summaries[char] = get_meta_summary(char)
+            current["meta_summary"] = copy.deepcopy(summaries[char])
+        for child in current.get("children", []):
+            enrich(child)
+
+    enrich(node)
 
 
 def format_result_item(
@@ -427,9 +433,8 @@ def _build_tier_and_stroke_filters(
     return where_clauses, sql_params
 
 
-@functools.lru_cache(maxsize=1)
 def get_joyo_characters() -> list[str]:
-    """常用漢字（grade <= 8）の全ソート済みリストをキャッシュ取得します。"""
+    """現在のDBから常用漢字（grade <= 8）のソート済みリストを取得します。"""
     conn = get_db_connection()
     if conn is None:
         return []

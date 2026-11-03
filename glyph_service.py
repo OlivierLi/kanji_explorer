@@ -9,6 +9,7 @@ Jigmoフォントからの正確なベクターアウトライン抽出、CHISE 
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import closing
 import bisect
 import copy
 import functools
@@ -2640,19 +2641,17 @@ def _get_stroke_count(char: str) -> int | None:
     if char in PRIMITIVE_STROKES:
         return PRIMITIVE_STROKES[char]
     if _STROKE_COUNT_CACHE is None:
-        _STROKE_COUNT_CACHE = {}
         db_path = DATA_DIR / "kanji_explorer.db"
-        if db_path.exists():
-            try:
-                conn = sqlite3.connect(str(db_path))
-                c = conn.cursor()
-                c.execute("SELECT char, stroke_count FROM characters WHERE stroke_count IS NOT NULL")
-                for ch, sc in c.fetchall():
-                    if ch and sc:
-                        _STROKE_COUNT_CACHE[ch] = int(sc)
-                conn.close()
-            except Exception:
-                pass
+        if not db_path.is_file():
+            return None
+        try:
+            with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+                rows = conn.execute("SELECT char, stroke_count FROM characters WHERE stroke_count IS NOT NULL")
+                counts = {ch: int(sc) for ch, sc in rows if ch and sc}
+            # Only successful, authoritative reads may populate the cache.
+            _STROKE_COUNT_CACHE = counts
+        except sqlite3.Error:
+            return None
     if char in _STROKE_COUNT_CACHE:
         return _STROKE_COUNT_CACHE[char]
     norm = ids_parser.normalize_component(char)

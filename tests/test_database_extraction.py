@@ -71,3 +71,14 @@ def test_existing_database_needs_no_package(packaged_database):
         assert server.get_db_connection().execute('SELECT value FROM example').fetchone()[0] == '完成'
     finally:
         server.close_db_connection()
+
+
+def test_readonly_database_uri_escapes_special_path_characters(packaged_database, monkeypatch):
+    original, expected = packaged_database
+    path = original.with_name('kanji #1?.db')
+    path.write_bytes(expected)
+    monkeypatch.setattr(server, 'DB_PATH', path)
+    try:
+        assert server.get_db_connection().execute('SELECT value FROM example').fetchone()[0] == '完成'
+    finally:
+        server.close_db_connection()

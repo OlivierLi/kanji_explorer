@@ -716,11 +716,12 @@ class TestCodeSimplificationAndDeduplication:
         assert "c.stroke_count <= ?" in clauses[2]
         assert params == [5, 10]
 
-    def test_get_joyo_characters_cached(self):
-        """常用漢字リストのキャッシュ取得が正常に機能すること."""
+    def test_get_joyo_characters_returns_independent_snapshots(self):
+        """常用漢字リストは同じ内容の独立したスナップショットを返すこと."""
         joyo1 = server.get_joyo_characters()
         joyo2 = server.get_joyo_characters()
-        assert joyo1 is joyo2
+        assert joyo1 == joyo2
+        assert joyo1 is not joyo2
         if joyo1:
             assert len(joyo1) == 2136
             assert "名" in joyo1
