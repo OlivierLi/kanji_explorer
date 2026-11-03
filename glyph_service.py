@@ -1256,7 +1256,12 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
     for s in candidates:
         if s and s not in seen_slugs:
             seen_slugs.add(s)
-            cache_candidates.append(GLYPHWIKI_CACHE_DIR / f"{s}.svg")
+            try:
+                cache_path = (GLYPHWIKI_CACHE_DIR / f"{s}.svg").resolve()
+                if cache_path.is_relative_to(GLYPHWIKI_CACHE_DIR.resolve()):
+                    cache_candidates.append(cache_path)
+            except (OSError, ValueError):
+                continue
 
     for cache_path in cache_candidates:
         if cache_path.is_file():
