@@ -538,7 +538,8 @@ def _query_component_rows_db(
     # multiply referenced set reusable without SQLite 3.35 MATERIALIZED syntax.
     matches_sql = f"""
         WITH ranked AS (
-            SELECT cc.*, ROW_NUMBER() OVER (
+            SELECT cc.target_char, cc.is_direct, cc.min_depth, cc.via_char,
+                   ROW_NUMBER() OVER (
                 PARTITION BY cc.target_char
                 ORDER BY cc.is_direct DESC, cc.min_depth ASC,
                          cc.target_priority ASC, cc.component ASC, COALESCE(cc.via_char, '') ASC
