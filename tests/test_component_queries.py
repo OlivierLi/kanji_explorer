@@ -79,3 +79,24 @@ def test_path_choice_does_not_depend_on_insertion_order(database):
     database.execute('DELETE FROM component_closure')
     database.executemany('INSERT INTO component_closure VALUES (?, ?, ?, ?, ?, ?)', reversed(rows))
     assert search() == before
+
+
+@pytest.mark.parametrize('query,chars', [('たべる ショク', ['甲']),
+                                       ('タベル しょく', ['甲']),
+                                       ('たべる まったくでたらめ', [])])
+def test_reading_search_honors_every_chip(database, query, chars):
+    database.execute("UPDATE characters SET ja_kun='た.べる', ja_on='ショク' WHERE char='甲'")
+    database.execute("UPDATE characters SET ja_kun='たべる', ja_on='エン' WHERE char='乙'")
+    result = search(components=query)
+    assert [r['char'] for r in result['results']] == chars
+    assert result['total'] == len(chars)
+
+
+def test_unavailable_reading_table_returns_service_unavailable(database):
+    database.execute('DROP TABLE characters')
+    statuses = []
+    body = server.application({'REQUEST_METHOD':'GET', 'PATH_INFO':'/api/ids-find',
+                               'QUERY_STRING':urlencode({'components':'たべる'})},
+                              lambda status, headers: statuses.append(status))
+    assert statuses == ['503 Service Unavailable']
+    assert 'error' in json.loads(b''.join(body))

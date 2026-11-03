@@ -434,6 +434,39 @@ def get_joyo_characters() -> list[str]:
         return []
 
 
+def query_reading_matches_db(
+    conn: sqlite3.Connection,
+    readings: list[str],
+    tier: str = "all",
+    min_strokes: int | None = None,
+    max_strokes: int | None = None,
+    limit: int = 120,
+) -> dict[str, Any]:
+    """全ての読み条件を適用し、辞書表記を表示用に保持したまま検索します。"""
+    conditions, params = _build_tier_and_stroke_filters(tier, min_strokes, max_strokes)
+    for reading in dict.fromkeys(readings):
+        variants = sorted({to_hiragana(reading), to_katakana(reading)})
+        clauses = []
+        for column in ("ja_on", "ja_kun"):
+            for variant in variants:
+                clauses.append(f"REPLACE(REPLACE(c.{column}, '.', ''), '-', '') LIKE ?")
+                params.append(f"%{variant}%")
+        conditions.append("(" + " OR ".join(clauses) + ")")
+    where_sql = " AND ".join(conditions)
+    total = conn.execute(f"SELECT COUNT(*) FROM characters c WHERE {where_sql}", params).fetchone()[0]
+    rows = conn.execute(f"""
+        SELECT c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
+               c.ja_on, c.ja_kun, c.grade, c.freq
+        FROM characters c WHERE {where_sql}
+        ORDER BY COALESCE(c.freq, 999999) ASC,
+                 COALESCE(c.grade, 999) ASC, c.sort_priority ASC,
+                 COALESCE(c.stroke_count, 999) ASC, c.char ASC
+        LIMIT ?
+    """, [*params, limit]).fetchall()
+    return {"total": total, "direct_total": total, "indirect_total": 0,
+            "results": [row_to_result_item(row) for row in rows]}
+
+
 def query_component_matches_db(
     conn: sqlite3.Connection,
     components: list[str],
@@ -1256,57 +1289,20 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             if conn is None:
                 self._send_error_json("読みの検索資料を利用できません。", status=503)
                 return
-            reading_term = raw_tokens[0]
-            term_hira = to_hiragana(reading_term)
-            term_kata = to_katakana(reading_term)
-
-            if conn is not None:
-                where_clauses = [
-                    "(REPLACE(REPLACE(c.ja_kun, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_kun, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_on, '.', ''), '-', '') LIKE ? OR REPLACE(REPLACE(c.ja_on, '.', ''), '-', '') LIKE ?)"
-                ]
-                sql_params: list[Any] = [
-                    f"%{term_hira}%",
-                    f"%{term_kata}%",
-                    f"%{term_hira}%",
-                    f"%{term_kata}%",
-                ]
-
-                # 区分（tier/category）及び画数フィルター
-                f_clauses, f_params = _build_tier_and_stroke_filters(tier, min_strokes, max_strokes)
-                where_clauses.extend(f_clauses)
-                sql_params.extend(f_params)
-
-                where_sql = " AND ".join(where_clauses)
-                count_query = f"SELECT COUNT(*) FROM characters c WHERE {where_sql}"
-                total = conn.execute(count_query, sql_params).fetchone()[0]
-
-                query_sql = f"""
-                    SELECT c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
-                           c.ja_on, c.ja_kun, c.grade, c.freq
-                    FROM characters c
-                    WHERE {where_sql}
-                    ORDER BY
-                        COALESCE(c.freq, 999999) ASC,
-                        CASE WHEN c.grade IS NOT NULL THEN c.grade ELSE 999 END ASC,
-                        c.sort_priority ASC,
-                        CASE WHEN (c.ja_on IS NOT NULL AND c.ja_on != '') OR (c.ja_kun IS NOT NULL AND c.ja_kun != '') THEN 0 ELSE 1 END ASC,
-                        COALESCE(c.stroke_count, 999) ASC
-                    LIMIT ?
-                """
-                sql_params.append(limit)
-                rows = conn.execute(query_sql, sql_params).fetchall()
-                results = [row_to_result_item(r, is_direct=1) for r in rows]
-
-                self._send_json_response({
-                    "query": raw_query,
-                    "components": norm_components,
-                    "search_type": "読み検索",
-                    "total": total,
-                    "direct_total": total,
-                    "indirect_total": 0,
-                    "results": results,
-                })
+            try:
+                matches = query_reading_matches_db(
+                    conn, raw_tokens, tier, min_strokes, max_strokes, limit
+                )
+            except sqlite3.Error:
+                self._send_error_json("読みの検索資料を利用できません。", status=503)
                 return
+            self._send_json_response({
+                "query": raw_query,
+                "components": norm_components,
+                "search_type": "読み検索",
+                **matches,
+            })
+            return
 
         # 構成要素検索
         if not norm_components:
