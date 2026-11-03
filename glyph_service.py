@@ -20,6 +20,7 @@ import math
 from pathlib import Path
 import re
 import sqlite3
+import threading
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -266,65 +267,74 @@ class _JigmoFontManager:
 
     def __init__(self, fonts_dir: Path | None = None) -> None:
         self.fonts_dir = fonts_dir or FONTS_DIR
-        self._fonts: list[TTFont] | None = None
-        self._cmaps: list[dict[int, str]] | None = None
+        self._faces: tuple[tuple[TTFont, dict[int, str]], ...] | None = None
+        self._lock = threading.RLock()
 
     def _ensure_loaded(self) -> None:
-        if self._fonts is not None:
-            return
-        font_filenames = ["Jigmo.ttf", "Jigmo2.ttf", "Jigmo3.ttf"]
-        loaded_fonts: list[TTFont] = []
-        loaded_cmaps: list[dict[int, str]] = []
-        for filename in font_filenames:
-            font_path = self.fonts_dir / filename
-            if not font_path.is_file():
-                continue
-            # lazy=True でメモリ効率よくオープン
-            font = TTFont(str(font_path), lazy=True)
-            loaded_fonts.append(font)
-            loaded_cmaps.append(font.getBestCmap() or {})
-        self._fonts = loaded_fonts
-        self._cmaps = loaded_cmaps
+        # FontTools lazily reads tables and mutates glyph state. Publish all
+        # font/cmap pairs together, and use the same lock for subsequent draws.
+        with self._lock:
+            if self._faces is not None:
+                return
+            loaded = []
+            try:
+                for filename in ("Jigmo.ttf", "Jigmo2.ttf", "Jigmo3.ttf"):
+                    font_path = self.fonts_dir / filename
+                    if not font_path.is_file():
+                        continue
+                    font = TTFont(str(font_path), lazy=True)
+                    try:
+                        cmap = font.getBestCmap() or {}
+                    except Exception:
+                        font.close()
+                        raise
+                    loaded.append((font, cmap))
+            except Exception:
+                for font, _ in loaded:
+                    font.close()
+                raise
+            self._faces = tuple(loaded)
 
     @functools.lru_cache(maxsize=16384)
     def get_path(self, char: str) -> str | None:
         """単一のUnicode文字のベクターアウトライン（SVG pathのd属性）を返します。"""
         if not char:
             return None
-        self._ensure_loaded()
-        if not self._fonts or not self._cmaps:
+        with self._lock:
+            self._ensure_loaded()
+            if not self._faces:
+                return None
+
+            # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
+            char_clean = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", char)
+            if not char_clean:
+                return None
+
+            # ⺍ の場合は 𭕄 (U+2D544) へのフォールバックも考慮
+            candidates = [char_clean]
+            if char_clean == "⺍":
+                candidates.append("𭕄")
+            elif char_clean == "𭕄":
+                candidates.append("⺍")
+
+            for c in candidates:
+                try:
+                    codepoint = ord(c)
+                except TypeError:
+                    continue
+
+                for font, cmap in self._faces:
+                    if codepoint in cmap:
+                        glyph_name = cmap[codepoint]
+                        glyph_set = font.getGlyphSet()
+                        pen = SVGPathPen(glyph_set)
+                        glyph = glyph_set[glyph_name]
+                        glyph.draw(pen)
+                        commands = pen.getCommands()
+                        if commands:
+                            return commands
+
             return None
-
-        # 異体字セレクタ (IVS: U+E0100..U+E01EF, SVS: U+FE00..U+FE0F) の除去
-        char_clean = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", char)
-        if not char_clean:
-            return None
-
-        # ⺍ の場合は 𭕄 (U+2D544) へのフォールバックも考慮
-        candidates = [char_clean]
-        if char_clean == "⺍":
-            candidates.append("𭕄")
-        elif char_clean == "𭕄":
-            candidates.append("⺍")
-
-        for c in candidates:
-            try:
-                codepoint = ord(c)
-            except TypeError:
-                continue
-
-            for font, cmap in zip(self._fonts, self._cmaps):
-                if codepoint in cmap:
-                    glyph_name = cmap[codepoint]
-                    glyph_set = font.getGlyphSet()
-                    pen = SVGPathPen(glyph_set)
-                    glyph = glyph_set[glyph_name]
-                    glyph.draw(pen)
-                    commands = pen.getCommands()
-                    if commands:
-                        return commands
-
-        return None
 
 
 # シングルトンフォントマネージャ
