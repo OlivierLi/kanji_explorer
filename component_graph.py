@@ -1,4 +1,6 @@
 """Deterministic component reachability shared by ETL and offline search."""
+from __future__ import annotations
+
 from collections import deque
 from collections.abc import Iterable, Mapping
 from typing import NamedTuple

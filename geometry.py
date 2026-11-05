@@ -2,6 +2,8 @@
 
 Coordinates are normalized screen coordinates; no raster or font dependency.
 """
+from __future__ import annotations
+
 
 def clip_polygon_area(points: list[tuple[float, float]], rect: list[float]) -> float:
     """Area of a contour inside an axis-aligned clip (Sutherland–Hodgman)."""

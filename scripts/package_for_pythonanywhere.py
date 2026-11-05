@@ -30,7 +30,7 @@ LIMIT = 100 * 1024 * 1024
 # Runtime-only manifest (relative to project root).
 CODE_FILES = [
     "server.py", "wsgi.py", "glyph_service.py", "ids_parser.py",
-    "jp_metadata.py", "view_renderer.py",
+    "jp_metadata.py", "view_renderer.py", "component_graph.py", "geometry.py",
 ]
 RUNTIME_DIRS = ["static", "data/chise-ids", "data/glyphwiki_cache"]
 RUNTIME_DATA = [

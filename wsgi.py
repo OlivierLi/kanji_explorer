@@ -3,6 +3,7 @@
 PythonAnywhere の Web アプリ設定から直接読み込むためのエントリーポイントです。
 WSGI サーバーは `from wsgi import application` をインポートしてリクエストをディスパッチします。
 """
+from __future__ import annotations
 
 import sys
 from pathlib import Path
