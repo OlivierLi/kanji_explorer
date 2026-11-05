@@ -656,7 +656,8 @@ const SLENDER_PHYSICS = {
   tonStrength: 1.08,
   waistRatio: 0.80,
   nibAngleDeg: -40,
-  kasureAmount: 0.30
+  kasureAmount: 0.30,
+  minTaperRatio: 0.10
 };
 
 /**
@@ -813,7 +814,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
   const origLen = Math.max(0.1, samplerPath.getTotalLength());
 
   const step = 0.28;
-  const numSamples = Math.max(32, Math.ceil(origLen / step));
+  const numSamples = Math.max(50, Math.ceil(origLen / step));
   const rawPts = [];
 
   const scale = boxSize / 109;
@@ -1029,10 +1030,6 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
   for (let i = 0; i <= numSamples; i++) {
     let iPrev = Math.max(0, i - 4);
     let iNext = Math.min(numSamples, i + 4);
-    if (hookFeature) {
-      if (i <= hookFeature.index && iNext > hookFeature.index) iNext = hookFeature.index;
-      if (i >= hookFeature.index && iPrev < hookFeature.index) iPrev = hookFeature.index;
-    }
     if (iPrev === iNext) {
       iPrev = Math.max(0, i - 1);
       iNext = Math.min(numSamples, i + 1);
@@ -1043,9 +1040,24 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     const mag = Math.hypot(dx, dy) || 1;
     rawPts[i].tx = dx / mag;
     rawPts[i].ty = dy / mag;
-    rawPts[i].nx = -rawPts[i].ty;
-    rawPts[i].ny = rawPts[i].tx;
-    rawPts[i].angle = Math.atan2(dy, dx);
+  }
+
+  // Smooth (tx, ty) with 2 passes of [0.25, 0.5, 0.25] filtering
+  for (let pass = 0; pass < 2; pass++) {
+    const nextTx = rawPts.map(p => p.tx);
+    const nextTy = rawPts.map(p => p.ty);
+    for (let i = 1; i < numSamples; i++) {
+      nextTx[i] = 0.25 * rawPts[i - 1].tx + 0.50 * rawPts[i].tx + 0.25 * rawPts[i + 1].tx;
+      nextTy[i] = 0.25 * rawPts[i - 1].ty + 0.50 * rawPts[i].ty + 0.25 * rawPts[i + 1].ty;
+    }
+    for (let i = 0; i <= numSamples; i++) {
+      const mag = Math.hypot(nextTx[i], nextTy[i]) || 1;
+      rawPts[i].tx = nextTx[i] / mag;
+      rawPts[i].ty = nextTy[i] / mag;
+      rawPts[i].nx = -rawPts[i].ty;
+      rawPts[i].ny = rawPts[i].tx;
+      rawPts[i].angle = Math.atan2(rawPts[i].ty, rawPts[i].tx);
+    }
   }
 
   const features = [...cornerFeatures];
@@ -1064,6 +1076,10 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
   const waistMult = SLENDER_PHYSICS.waistRatio;
 
   // Calculate width envelopes wL & wR
+  const rawWL = new Float32Array(numSamples + 1);
+  const rawWR = new Float32Array(numSamples + 1);
+  const rawPoolWeight = new Float32Array(numSamples + 1);
+
   for (let i = 0; i <= numSamples; i++) {
     const p = rawPts[i];
     const u = p.u;
@@ -1071,12 +1087,6 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
 
     let wL = 1.0;
     let wR = 1.0;
-    let shiftL = 0.0;
-    let shiftR = 0.0;
-    let cornerDispLx = 0.0;
-    let cornerDispLy = 0.0;
-    let cornerDispRx = 0.0;
-    let cornerDispRy = 0.0;
     let poolWeight = 0.25;
 
     if (behavior.isDot) {
@@ -1086,34 +1096,35 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       wR = 0.26 + (0.90 * tonMult) * arch;
       poolWeight = 0.40 + 0.55 * arch;
     } else if (behavior.isRisingTi) {
-      // 提 (tí) - rising stroke
-      const headZone = Math.min(5.5, totalLen * 0.28);
+      // 提 (tí) - rising stroke with steady calligraphic slope attack to sharp point
+      const headZone = Math.min(totalLen * 0.26, 4.5);
       if (s < headZone) {
         const t = s / headZone;
         const blend = 0.5 * (1 + Math.cos(t * Math.PI));
-        wL = 0.88 + (0.42 * tonMult) * blend;
-        wR = 0.88 + (0.75 * tonMult) * blend;
+        wL = 0.88 + (0.32 * tonMult) * blend;
+        wR = 0.92 + (0.42 * tonMult) * blend;
         poolWeight = 0.85;
       } else {
         const t = (s - headZone) / Math.max(0.1, totalLen - headZone);
-        const taper = Math.pow(Math.max(0.06, 1 - t * 0.94), 0.85);
+        const taper = 1.0 - 0.90 * Math.pow(t, 1.05);
         wL = 0.88 * taper;
-        wR = (0.88 + 0.25 * tonMult) * taper;
+        wR = 0.92 * taper;
         poolWeight = 0.35 * (1 - t);
       }
     } else if (behavior.isRightNa) {
-      // 捺 (nà / 磔) - smooth C1/C2 wave stroke with heavy foot and crisp tapered point
-      if (u <= 0.68) {
-        const t = u / 0.68;
-        const swell = Math.sin(t * Math.PI * 0.5);
-        wL = 0.32 + (0.95 * tonMult - 0.32) * swell;
-        wR = 0.32 + (1.42 * tonMult - 0.32) * swell;
+      // 捺 (nà / 磔) - clean gradual press to wave foot at u=0.72 without mid-stroke bulge, then crisp taper to point
+      const footU = 0.72;
+      if (u <= footU) {
+        const t = u / footU;
+        const swell = Math.pow(t, 1.15);
+        wL = 0.58 + (0.90 - 0.58) * swell;
+        wR = 0.58 + (1.06 - 0.58) * swell;
         poolWeight = 0.30 + 0.65 * swell;
       } else {
-        const tFoot = (u - 0.68) / 0.32;
-        const decay = Math.pow(Math.cos(tFoot * Math.PI * 0.5), 1.5);
-        wL = Math.max(0.02, (0.95 * tonMult) * decay);
-        wR = Math.max(0.02, (1.42 * tonMult) * decay);
+        const tFoot = (u - footU) / (1.0 - footU);
+        const decay = 1.0 - 0.90 * Math.pow(tFoot, 1.05);
+        wL = 0.90 * decay;
+        wR = 1.06 * decay;
         poolWeight = 0.95 * decay;
       }
     } else {
@@ -1123,7 +1134,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       wL = shaftTension;
       wR = shaftTension;
 
-      // C1 Smooth Entry Press: entry width starts at 0.68 and swells smoothly without initial spur
+      // C1 Smooth Entry Press: entry width starts smoothly without initial spur
       const headLen = Math.min(totalLen * 0.22, 6.0);
       if (s < headLen) {
         const uEntry = s / headLen;
@@ -1133,124 +1144,103 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         poolWeight = 0.85 * blend + 0.25;
 
         if (isDownEntry) {
-          // Vertical down entry: upper-right rounded shoulder
           wL += (0.38 * tonMult) * blend;
           wR += (0.16 * tonMult) * blend;
-          shiftL -= (0.10 * blend) * entrySwell;
         } else if (isRightToLeftSweep) {
-          // Upper-right sweeping entry
           wR += (0.36 * tonMult) * blend;
           wL += (0.20 * tonMult) * blend;
-          shiftL -= (0.12 * blend) * entrySwell;
         } else {
-          // Horizontal entry: taut top and bottom edges, slanted ~45° entry cap, NO upward horn
-          wL = shaftTension * (0.96 + 0.08 * blend);
-          wR = shaftTension * (1.02 + 0.14 * blend);
-          shiftL = (-0.48 * blend) * entrySwell;
-          shiftR = (+0.22 * blend) * entrySwell;
+          wL = shaftTension * (1.0 + 0.08 * blend);
+          wR = shaftTension * (1.0 + 0.14 * blend);
         }
         wL *= entryWidthFactor;
         wR *= entryWidthFactor;
       }
 
-      // Authentic ~45° Calligraphic Outer Corner Shoulder (折 - Jiucheng Palace Callout #2)
-      cornerDispLx = 0.0;
-      cornerDispLy = 0.0;
-      cornerDispRx = 0.0;
-      cornerDispRy = 0.0;
-
+      // Smooth outer corner shoulders
       for (const cf of cornerFeatures) {
-        const d = s - cf.s; // ALREADY in SVG units!
-        if (d >= -5.0 && d <= 5.0) {
-          const tInner = d / 3.6;
-          const bellInner = Math.abs(tInner) <= 1.0 ? 0.5 * (1 + Math.cos(tInner * Math.PI)) : 0.0;
-          const bellMid = Math.abs(d / 3.6) <= 1.0 ? 0.5 * (1 + Math.cos((d / 3.6) * Math.PI)) : 0.0;
-          poolWeight = Math.max(poolWeight, 0.95 * bellMid);
+        const d = s - cf.s;
+        if (d >= -4.5 && d <= 4.5) {
+          const t = d / 4.5;
+          const bell = 0.5 * (1 + Math.cos(t * Math.PI));
+          poolWeight = Math.max(poolWeight, 0.95 * bell);
 
           if (cf.turnSign >= 0) {
-            // Gentle inner crease tuck avoiding pinched nicks
-            wL = Math.max(0.68, wL - 0.10 * bellInner);
+            wR += (0.28 * tonMult) * bell;
+            wL = Math.max(0.68, wL - 0.12 * bell);
           } else {
-            wR = Math.max(0.68, wR - 0.10 * bellInner);
+            wL += (0.28 * tonMult) * bell;
+            wR = Math.max(0.68, wR - 0.12 * bell);
           }
         }
       }
 
-      // Hook Resting Heel
+      // Hook Resting Heel & Flick
       if (hookFeature) {
         const hs = hookFeature.s;
-        const dsHook = s - hs;
-        if (dsHook <= 0) {
-          const dHeel = -dsHook;
-          if (dHeel < 7.0) {
-            const tHeel = dHeel / 7.0;
+        if (s < hs) {
+          const dHeel = hs - s;
+          const heelRange = (behavior.isCurvedBowHook || (stroke.type || "").includes("㇈") || (stroke.type || "").includes("㇃") || (stroke.type || "").includes("㇆")) ? 16.0 : 7.0;
+          if (dHeel < heelRange) {
+            const tHeel = dHeel / heelRange;
             const heelBell = 0.5 * (1 + Math.cos(tHeel * Math.PI));
-            // Swell the outer resting heel gently without bloating inner crease
             const outerIsL = (hookFeature.flickUx < 0 && p.tx < 0.3) || (hookFeature.flickUy < -0.5 && p.turnSign < 0);
             if (outerIsL) {
-              wL += (0.24 * tonMult) * heelBell;
-              wR = Math.min(wR, shaftTension * (1.0 - 0.20 * heelBell));
+              wL += (0.22 * tonMult) * heelBell;
             } else {
-              wR += (0.24 * tonMult) * heelBell;
-              wL = Math.min(wL, shaftTension * (1.0 - 0.20 * heelBell));
+              wR += (0.22 * tonMult) * heelBell;
             }
             poolWeight = Math.max(poolWeight, 0.95 * heelBell);
           }
+        } else {
+          const tFlick = (s - hs) / Math.max(0.1, totalLen - hs);
+          const flickTaper = 1.0 - 0.90 * Math.pow(tFlick, 0.88);
+          wL *= flickTaper;
+          wR *= flickTaper;
+          poolWeight = Math.max(0.1, 0.8 * (1.0 - tFlick));
         }
       } else if (behavior.isRoofHook) {
-        // Roof hook (横鉤 in 冖 / 宀): full solid horizontal bar & corner, then tapers rapidly after the shoulder corner to a sharp point
         const cornerU = cornerFeatures[0] ? cornerFeatures[0].u : 0.78;
         if (u > cornerU) {
           const tHook = (u - cornerU) / (1 - cornerU);
-          const taper = Math.pow(Math.max(0.02, 1.0 - tHook * 0.98), 0.75);
+          const taper = 1.0 - 0.90 * Math.pow(tHook, 1.05);
           wL *= taper;
           wR *= taper;
         }
       } else if (behavior.isVerticalTi) {
-        // 竪提 / 横折提: maintain shaft weight until corner, then taper rapidly after final corner to sharp up-right flick
         const lastCf = cornerFeatures[cornerFeatures.length - 1];
         const cornerU = lastCf ? lastCf.u : 0.75;
         if (u > cornerU) {
           const tTi = (u - cornerU) / (1 - cornerU);
-          const taper = Math.pow(Math.max(0.03, 1.0 - tTi * 0.97), 0.70);
-          wL *= taper;
-          wR *= taper;
-        }
-      } else if (behavior.isRisingTi) {
-        // 提: tapers up-right to a crisp point without kasure
-        if (u > 0.40) {
-          const tTi = (u - 0.40) / 0.60;
-          const taper = Math.pow(Math.max(0.02, 1.0 - tTi * 0.98), 0.78);
+          const taper = 1.0 - 0.90 * Math.pow(tTi, 1.05);
           wL *= taper;
           wR *= taper;
         }
       } else if (behavior.isSweepEnd) {
         if (behavior.isZiHengPie) {
-          // Connecting sweep for 子 / 了: tapers smoothly to 0.40 * baseWidth at tip to solidly join stroke 7
           const cornerU = cornerFeatures[0] ? cornerFeatures[0].u : 0.60;
           if (u > cornerU) {
             const tSweep = (u - cornerU) / (1 - cornerU);
-            const taper = 1.0 - tSweep * 0.60; // finishes firmly at 0.40!
+            const taper = 1.0 - 0.60 * tSweep;
             wL *= taper;
             wR *= taper;
           }
         } else {
-          // Sweeps: smooth organic taper running full length
-          const sweepStart = isRightToLeftSweep ? 0.38 : 0.44;
+          const lastCf = cornerFeatures.length > 0 ? cornerFeatures[cornerFeatures.length - 1] : null;
+          const sweepStart = (lastCf && lastCf.u > 0.42) ? lastCf.u : (isRightToLeftSweep ? 0.30 : 0.34);
           if (u > sweepStart) {
             const tSweep = (u - sweepStart) / (1 - sweepStart);
-            const taper = Math.pow(Math.max(0.02, 1 - tSweep * 0.98), 0.78);
+            const taper = 1.0 - 0.90 * Math.pow(tSweep, 1.05);
             wL *= taper;
             wR *= taper;
           }
         }
       } else if (behavior.isVertical && !behavior.isFold) {
-        // Vertical end stopping - C1 smooth swell without pinching
         const endDist = totalLen - s;
         const tomeZone = Math.min(5.5, totalLen * 0.28);
         if (endDist < tomeZone) {
           const t = 1 - (endDist / tomeZone);
-          const smoothT = 3 * t * t - 2 * t * t * t;
+          const smoothT = 0.5 * (1 - Math.cos(t * Math.PI));
           if (behavior.isConnectingVertical) {
             wL += (0.15 * tonMult) * smoothT;
             wR += (0.15 * tonMult) * smoothT;
@@ -1261,37 +1251,75 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           }
         }
       } else {
-        // Horizontal end stopping - C1 smooth swell without pinching
         const endDist = totalLen - s;
         const tomeZone = Math.min(5.5, totalLen * 0.28);
         if (endDist < tomeZone) {
           const t = 1 - (endDist / tomeZone);
-          const smoothT = 3 * t * t - 2 * t * t * t;
+          const smoothT = 0.5 * (1 - Math.cos(t * Math.PI));
           wL += (0.30 * tonMult) * smoothT;
-          wR += (0.48 * tonMult) * smoothT;
-          shiftR += 0.16 * smoothT;
+          wR += (0.42 * tonMult) * smoothT;
           poolWeight = Math.max(poolWeight, 0.88 * smoothT);
         }
       }
     }
 
-    const rL = shaftRadius * wL;
-    const rR = shaftRadius * wR;
+    rawWL[i] = wL;
+    rawWR[i] = wR;
+    rawPoolWeight[i] = poolWeight;
+  }
 
-    p.lx = p.x + p.nx * rL + p.tx * (shiftL * shaftRadius) + cornerDispLx;
-    p.ly = p.y + p.ny * rL + p.ty * (shiftL * shaftRadius) + cornerDispLy;
-    p.rx = p.x - p.nx * rR + p.tx * (shiftR * shaftRadius) + cornerDispRx;
-    p.ry = p.y - p.ny * rR + p.ty * (shiftR * shaftRadius) + cornerDispRy;
+  // Curvature-clamped inner offset
+  const clampedRL = new Float32Array(numSamples + 1);
+  const clampedRR = new Float32Array(numSamples + 1);
+  for (let i = 0; i <= numSamples; i++) {
+    let rL = shaftRadius * rawWL[i];
+    let rR = shaftRadius * rawWR[i];
+    const iPrev = Math.max(0, i - 1);
+    const iNext = Math.min(numSamples, i + 1);
+    const dTheta = Math.hypot(rawPts[iNext].tx - rawPts[iPrev].tx, rawPts[iNext].ty - rawPts[iPrev].ty);
+    const ds = Math.max(0.1, (rawPts[iNext].s - rawPts[iPrev].s) * scale);
+    const kappa = dTheta / ds;
+    if (kappa > 1e-4) {
+      const maxR = Math.max(shaftRadius * 0.70, 0.90 / kappa);
+      const cross = rawPts[iPrev].tx * rawPts[iNext].ty - rawPts[iPrev].ty * rawPts[iNext].tx;
+      if (cross > 0) {
+        rL = Math.min(rL, maxR);
+      } else if (cross < 0) {
+        rR = Math.min(rR, maxR);
+      }
+    }
+    clampedRL[i] = rL;
+    clampedRR[i] = rR;
+  }
 
-    p.pressure = Math.max(0.08, (Math.abs(wL) + Math.abs(wR)) * 0.5);
-    p.radius = Math.max(0.4, (Math.abs(rL) + Math.abs(rR)) * 0.5);
-    p.poolWeight = poolWeight;
+  // Smooth clamped radii across neighbors
+  for (let pass = 0; pass < 2; pass++) {
+    const sRL = new Float32Array(clampedRL);
+    const sRR = new Float32Array(clampedRR);
+    for (let i = 1; i < numSamples; i++) {
+      clampedRL[i] = 0.25 * sRL[i - 1] + 0.50 * sRL[i] + 0.25 * sRL[i + 1];
+      clampedRR[i] = 0.25 * sRR[i - 1] + 0.50 * sRR[i] + 0.25 * sRR[i + 1];
+    }
+  }
+
+  for (let i = 0; i <= numSamples; i++) {
+    const p = rawPts[i];
+    const rL = clampedRL[i];
+    const rR = clampedRR[i];
+    p.lx = p.x + p.nx * rL;
+    p.ly = p.y + p.ny * rL;
+    p.rx = p.x - p.nx * rR;
+    p.ry = p.y - p.ny * rR;
+
+    p.pressure = Math.max(0.08, (rL + rR) / (2 * shaftRadius));
+    p.radius = Math.max(0.4, (rL + rR) * 0.5);
+    p.poolWeight = rawPoolWeight[i];
     p.speedFactor = Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, p.pressure));
   }
 
-  // Laplacian smoothing up to hook apex
-  const smoothLimit = hookFeature ? hookFeature.index : numSamples - 1;
-  for (let pass = 0; pass < 2; pass++) {
+  // 4 passes of Laplacian smoothing all the way to numSamples - 1
+  const smoothLimit = numSamples - 1;
+  for (let pass = 0; pass < 4; pass++) {
     const nextLx = rawPts.map(p => p.lx);
     const nextLy = rawPts.map(p => p.ly);
     const nextRx = rawPts.map(p => p.rx);
@@ -1311,74 +1339,165 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
-  // Post-smoothing: Apply authentic ~45° calligraphic outer corner shoulder bevel (折 - Callout #2)
-  for (const cf of cornerFeatures) {
-    const prevTx = rawPts[Math.max(0, cf.index - 8)].tx;
-    const nextTy = rawPts[Math.min(numSamples, cf.index + 8)].ty;
-    const isTopRightCorner = cf.turnSign >= 0 && prevTx > 0.40 && nextTy > 0.25;
-
-    if (isTopRightCorner) {
-      const w = shaftRadius * tonMult;
-      for (let i = 0; i <= numSamples; i++) {
-        const p = rawPts[i];
-        const d = p.s - cf.s;
-        if (d >= -7.0 && d <= 10.0) {
-          const t1 = (d - (-1.8)) / 4.2;
-          const b1 = Math.abs(t1) <= 1.0 ? 0.5 * (1 + Math.cos(t1 * Math.PI)) : 0.0;
-
-          const t2 = (d - 1.0) / 5.0;
-          const b2 = Math.abs(t2) <= 1.0 ? 0.5 * (1 + Math.cos(t2 * Math.PI)) : 0.0;
-
-          p.rx += (+0.06 * w) * b1 + (+0.26 * w) * b2;
-          p.ry += (-0.16 * w) * b1 + (+0.04 * w) * b2;
+  // Forward-progression enforcement pass on (lx, ly) and (rx, ry)
+  for (let iter = 0; iter < 6; iter++) {
+    for (let i = 0; i < numSamples; i++) {
+      const dLx = rawPts[i + 1].lx - rawPts[i].lx;
+      const dLy = rawPts[i + 1].ly - rawPts[i].ly;
+      const dotL = dLx * rawPts[i].tx + dLy * rawPts[i].ty;
+      if (dotL < 0.05) {
+        const neededL = 0.08 - dotL;
+        if (i > 0) {
+          rawPts[i].lx -= rawPts[i].tx * (neededL * 0.5);
+          rawPts[i].ly -= rawPts[i].ty * (neededL * 0.5);
+          rawPts[i + 1].lx += rawPts[i].tx * (neededL * 0.5);
+          rawPts[i + 1].ly += rawPts[i].ty * (neededL * 0.5);
+        } else {
+          rawPts[i + 1].lx += rawPts[i].tx * neededL;
+          rawPts[i + 1].ly += rawPts[i].ty * neededL;
         }
+      }
+
+      const dRx = rawPts[i + 1].rx - rawPts[i].rx;
+      const dRy = rawPts[i + 1].ry - rawPts[i].ry;
+      const dotR = dRx * rawPts[i].tx + dRy * rawPts[i].ty;
+      if (dotR < 0.05) {
+        const neededR = 0.08 - dotR;
+        if (i > 0) {
+          rawPts[i].rx -= rawPts[i].tx * (neededR * 0.5);
+          rawPts[i].ry -= rawPts[i].ty * (neededR * 0.5);
+          rawPts[i + 1].rx += rawPts[i].tx * (neededR * 0.5);
+          rawPts[i + 1].ry += rawPts[i].ty * (neededR * 0.5);
+        } else {
+          rawPts[i + 1].rx += rawPts[i].tx * neededR;
+          rawPts[i + 1].ry += rawPts[i].ty * neededR;
+        }
+      }
+    }
+
+    for (let i = 1; i < numSamples; i++) {
+      const sLx = 0.2 * rawPts[i - 1].lx + 0.6 * rawPts[i].lx + 0.2 * rawPts[i + 1].lx;
+      const sLy = 0.2 * rawPts[i - 1].ly + 0.6 * rawPts[i].ly + 0.2 * rawPts[i + 1].ly;
+      const pDotL = (sLx - rawPts[i - 1].lx) * rawPts[i - 1].tx + (sLy - rawPts[i - 1].ly) * rawPts[i - 1].ty;
+      const nDotL = (rawPts[i + 1].lx - sLx) * rawPts[i].tx + (rawPts[i + 1].ly - sLy) * rawPts[i].ty;
+      if (pDotL >= 0.05 && nDotL >= 0.05) {
+        rawPts[i].lx = sLx;
+        rawPts[i].ly = sLy;
+      }
+
+      const sRx = 0.2 * rawPts[i - 1].rx + 0.6 * rawPts[i].rx + 0.2 * rawPts[i + 1].rx;
+      const sRy = 0.2 * rawPts[i - 1].ry + 0.6 * rawPts[i].ry + 0.2 * rawPts[i + 1].ry;
+      const pDotR = (sRx - rawPts[i - 1].rx) * rawPts[i - 1].tx + (sRy - rawPts[i - 1].ry) * rawPts[i - 1].ty;
+      const nDotR = (rawPts[i + 1].rx - sRx) * rawPts[i].tx + (rawPts[i + 1].ry - sRy) * rawPts[i].ty;
+      if (pDotR >= 0.05 && nDotR >= 0.05) {
+        rawPts[i].rx = sRx;
+        rawPts[i].ry = sRy;
       }
     }
   }
 
-  // Light boundary smoothing specifically around corner regions for organic C1 continuity
-  for (const cf of cornerFeatures) {
-    for (let pass = 0; pass < 2; pass++) {
-      const tempRx = [];
-      const tempRy = [];
-      const tempLx = [];
-      const tempLy = [];
-      for (let i = 1; i < smoothLimit; i++) {
-        const d = rawPts[i].s - cf.s;
-        if (d >= -8.0 && d <= 12.0) {
-          tempRx[i] = 0.25 * rawPts[i - 1].rx + 0.50 * rawPts[i].rx + 0.25 * rawPts[i + 1].rx;
-          tempRy[i] = 0.25 * rawPts[i - 1].ry + 0.50 * rawPts[i].ry + 0.25 * rawPts[i + 1].ry;
-          tempLx[i] = 0.25 * rawPts[i - 1].lx + 0.50 * rawPts[i].lx + 0.25 * rawPts[i + 1].lx;
-          tempLy[i] = 0.25 * rawPts[i - 1].ly + 0.50 * rawPts[i].ly + 0.25 * rawPts[i + 1].ly;
-        }
+  // Self-intersection loop collapsing
+  function collapsePolylineLoops(pts, isLeft) {
+    const getP = (idx) => isLeft ? { x: pts[idx].lx, y: pts[idx].ly } : { x: pts[idx].rx, y: pts[idx].ry };
+    const setP = (idx, x, y) => {
+      if (isLeft) {
+        pts[idx].lx = x;
+        pts[idx].ly = y;
+      } else {
+        pts[idx].rx = x;
+        pts[idx].ry = y;
       }
-      for (let i = 1; i < smoothLimit; i++) {
-        const d = rawPts[i].s - cf.s;
-        if (d >= -8.0 && d <= 12.0 && tempRx[i] !== undefined) {
-          rawPts[i].rx = tempRx[i];
-          rawPts[i].ry = tempRy[i];
-          rawPts[i].lx = tempLx[i];
-          rawPts[i].ly = tempLy[i];
+    };
+    function ccw(p1, p2, p3) {
+      return (p3.y - p1.y) * (p2.x - p1.x) - (p2.y - p1.y) * (p3.x - p1.x);
+    }
+    function checkIntersect(p1, p2, p3, p4) {
+      const min1x = Math.min(p1.x, p2.x), max1x = Math.max(p1.x, p2.x);
+      const min1y = Math.min(p1.y, p2.y), max1y = Math.max(p1.y, p2.y);
+      const min2x = Math.min(p3.x, p4.x), max2x = Math.max(p3.x, p4.x);
+      const min2y = Math.min(p3.y, p4.y), max2y = Math.max(p3.y, p4.y);
+      if (max1x < min2x || max2x < min1x || max1y < min2y || max2y < min1y) return false;
+      const c1 = ccw(p1, p2, p3);
+      const c2 = ccw(p1, p2, p4);
+      const c3 = ccw(p3, p4, p1);
+      const c4 = ccw(p3, p4, p2);
+      return ((c1 > 0 && c2 < 0) || (c1 < 0 && c2 > 0)) && ((c3 > 0 && c4 < 0) || (c3 < 0 && c4 > 0));
+    }
+
+    let iterations = 0;
+    while (iterations < 6) {
+      let found = false;
+      const n = pts.length;
+      for (let i = 0; i < n - 1; i++) {
+        const p1 = getP(i);
+        const p2 = getP(i + 1);
+        for (let j = i + 2; j < n - 1; j++) {
+          const p3 = getP(j);
+          const p4 = getP(j + 1);
+          if (checkIntersect(p1, p2, p3, p4)) {
+            const a = i;
+            const b = j + 1;
+            const pa = getP(a);
+            const pb = getP(b);
+            for (let k = a + 1; k < b; k++) {
+              const t = (k - a) / (b - a);
+              setP(k, pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y));
+            }
+            found = true;
+            break;
+          }
         }
+        if (found) break;
       }
+      if (!found) break;
+      iterations++;
     }
   }
 
-  // Boundary micro-jitter for organic paper absorption
-  const strokeSeed = (stroke.index || 1) * 67 + 11;
-  const jitScale = boxSize / 792;
-  for (let i = 1; i <= smoothLimit; i++) {
-    const p = rawPts[i];
-    const h1 = Math.sin(i * 12.9898 + strokeSeed) * 43758.5453;
-    const jitL = (h1 - Math.floor(h1) - 0.5) * 0.70 * jitScale;
-    const h2 = Math.sin(i * 27.6543 + strokeSeed) * 43758.5453;
-    const jitR = (h2 - Math.floor(h2) - 0.5) * 0.70 * jitScale;
+  collapsePolylineLoops(rawPts, true);
+  collapsePolylineLoops(rawPts, false);
 
-    p.lx += p.nx * jitL;
-    p.ly += p.ny * jitL;
-    p.rx += p.nx * jitR;
-    p.ry += p.ny * jitR;
+  for (let i = 0; i < numSamples; i++) {
+    const dLx = rawPts[i + 1].lx - rawPts[i].lx;
+    const dLy = rawPts[i + 1].ly - rawPts[i].ly;
+    const dotL = dLx * rawPts[i].tx + dLy * rawPts[i].ty;
+    if (dotL < -0.15) {
+      rawPts[i + 1].lx += rawPts[i].tx * (-0.10 - dotL);
+      rawPts[i + 1].ly += rawPts[i].ty * (-0.10 - dotL);
+    }
+    const dRx = rawPts[i + 1].rx - rawPts[i].rx;
+    const dRy = rawPts[i + 1].ry - rawPts[i].ry;
+    const dotR = dRx * rawPts[i].tx + dRy * rawPts[i].ty;
+    if (dotR < -0.15) {
+      rawPts[i + 1].rx += rawPts[i].tx * (-0.10 - dotR);
+      rawPts[i + 1].ry += rawPts[i].ty * (-0.10 - dotR);
+    }
   }
+
+  // Expanded corner features for geometry and evaluation
+  const evalCornerFeatures = [...cornerFeatures];
+  // Also detect short-stroke flick corner like 心 s3 (origLen < 25)
+  if (cornerFeatures.length === 0) {
+    let bestA = 0;
+    let bestI = -1;
+    for (let i = 2; i < numSamples - 2; i++) {
+      if (rawPts[i].turnAngle > bestA && rawPts[i].turnAngle > 0.45) {
+        bestA = rawPts[i].turnAngle;
+        bestI = i;
+      }
+    }
+    if (bestI !== -1) {
+      evalCornerFeatures.push({
+        index: bestI,
+        u: rawPts[bestI].u,
+        s: rawPts[bestI].s,
+        angle: bestA,
+        turnSign: rawPts[bestI].turnSign,
+        kind: "corner"
+      });
+    }
+  }
+
 
   return {
     stroke,
@@ -1389,7 +1508,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     samples: rawPts,
     features,
     hookFeature,
-    cornerFeatures,
+    cornerFeatures: evalCornerFeatures,
     boxSize
   };
 }
@@ -1401,7 +1520,7 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
   const pts = compiled.samples;
   if (!pts || limitIdx < 1) return "";
 
-  const isSharpTip = (compiled.behavior.isSweepEnd && !compiled.behavior.isZiHengPie) || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || compiled.behavior.isRightNa;
+  const isSharpTip = (compiled.behavior.isSweepEnd && !compiled.behavior.isZiHengPie) || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || compiled.behavior.isRightNa || !!compiled.hookFeature;
   const leftChain = [];
   const rightChain = [];
   const hf = compiled.hookFeature;
@@ -1427,7 +1546,7 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
   const lastL = smoothL[smoothL.length - 1];
   const lastR = smoothR[smoothR.length - 1];
   const endPt = pts[limitIdx];
-  const tipExt = 3.5 * ((compiled.boxSize || 109) / 792);
+  const tipExt = (compiled.hookFeature ? 1.2 : 1.8) * ((compiled.boxSize || 109) / 792);
 
   if (isHookTruncated) {
     d += " L " + numFmt(lastR.x) + " " + numFmt(lastR.y);
@@ -1569,11 +1688,8 @@ function generateKasureSlitsPath(compiled, limitIdx) {
 
   const kScale = (SLENDER_PHYSICS.kasureAmount || 0.30) / 0.30;
   const kasureChannels = [
-    { lat: 0.20, startU: 0.72, endU: 0.98, widthFrac: 0.065 * kScale },
-    { lat: 0.38, startU: 0.66, endU: 1.00, widthFrac: 0.075 * kScale },
-    { lat: 0.60, startU: 0.76, endU: 0.99, widthFrac: 0.070 * kScale },
-    { lat: 0.78, startU: 0.70, endU: 1.00, widthFrac: 0.075 * kScale },
-    { lat: 0.94, startU: 0.86, endU: 0.99, widthFrac: 0.080 * kScale }
+    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
+    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
   ];
 
   let slitPathD = "";
@@ -1649,15 +1765,7 @@ function compileSlenderStrokePathD(d, type = "", index = 0, totalStrokes = 10, c
     const hf = compiled.hookFeature;
     const heelIdx = hf ? (hf.heelIdx || Math.max(4, hf.index - 4)) : -1;
 
-    let pathD = "";
-    if (hf && limit > heelIdx) {
-      const stopIdx = (hf && hf.isDownLeftHook) ? Math.max(8, heelIdx - 5) : heelIdx;
-      pathD = traceSmoothStrokeContourPath(compiled, stopIdx, true);
-      const wedgeD = drawFleshyHookWedgePath(compiled, limit, heelIdx);
-      if (wedgeD) pathD += " " + wedgeD;
-    } else {
-      pathD = traceSmoothStrokeContourPath(compiled, limit, false);
-    }
+    let pathD = traceSmoothStrokeContourPath(compiled, limit, false);
 
     // 長撇スリット渇筆（Kasure）
     const kasureD = generateKasureSlitsPath(compiled, limit);
@@ -1709,14 +1817,14 @@ function getCloudySumiTextureCanvas() {
       return (seed - 1) / 2147483646;
     }
 
-    // Multi-scale soft cloudy blotches with strong tonal contrast
+    // Multi-scale soft cloudy blotches with subtle tonal contrast
     for (let i = 0; i < 95; i++) {
       const cx = rnd() * size;
       const cy = rnd() * size;
       const rad = 14 + rnd() * 24;
       const grad = tCtx.createRadialGradient(cx, cy, 0, cx, cy, rad);
       const isDark = rnd() > 0.42;
-      grad.addColorStop(0, isDark ? "rgba(4, 3, 2, 0.75)" : "rgba(65, 56, 48, 0.35)");
+      grad.addColorStop(0, isDark ? "rgba(18, 15, 12, 0.14)" : "rgba(45, 38, 32, 0.08)");
       grad.addColorStop(1, "rgba(0, 0, 0, 0)");
       tCtx.fillStyle = grad;
       tCtx.beginPath();
@@ -1732,7 +1840,7 @@ function getCloudySumiTextureCanvas() {
       const fy = rnd() * size;
       const len = 2.5 + rnd() * 4.5;
       const ang = rnd() * Math.PI * 2;
-      tCtx.strokeStyle = rnd() > 0.5 ? "rgba(6, 4, 3, 0.28)" : "rgba(58, 50, 42, 0.22)";
+      tCtx.strokeStyle = rnd() > 0.5 ? "rgba(18, 15, 12, 0.08)" : "rgba(38, 32, 28, 0.05)";
       tCtx.beginPath();
       tCtx.moveTo(fx, fy);
       tCtx.lineTo(fx + Math.cos(ang) * len, fy + Math.sin(ang) * len);
@@ -1746,7 +1854,7 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
   const pts = compiled.samples;
   if (!pts || limitIdx < 1) return;
 
-  const isSharpTip = (compiled.behavior.isSweepEnd && !compiled.behavior.isZiHengPie) || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || compiled.behavior.isRightNa;
+  const isSharpTip = (compiled.behavior.isSweepEnd && !compiled.behavior.isZiHengPie) || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || compiled.behavior.isRightNa || !!compiled.hookFeature;
 
   // Standard smooth boundary chains up to limitIdx
   const leftChain = [];
@@ -1773,7 +1881,7 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
   const lastL = smoothL[smoothL.length - 1];
   const lastR = smoothR[smoothR.length - 1];
   const endPt = pts[limitIdx];
-  const tipExt = 3.5 * ((compiled.boxSize || 792) / 792);
+  const tipExt = (compiled.hookFeature ? 1.2 : 1.8) * ((compiled.boxSize || 792) / 792);
 
   if (isHookTruncated) {
     ctx.lineTo(lastR.x, lastR.y);
@@ -1986,11 +2094,8 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
 
   const kScale = (SLENDER_PHYSICS.kasureAmount || 0.30) / 0.30;
   const kasureChannels = [
-    { lat: 0.20, startU: 0.72, endU: 0.98, widthFrac: 0.065 * kScale },
-    { lat: 0.38, startU: 0.66, endU: 1.00, widthFrac: 0.075 * kScale },
-    { lat: 0.60, startU: 0.76, endU: 0.99, widthFrac: 0.070 * kScale },
-    { lat: 0.78, startU: 0.70, endU: 1.00, widthFrac: 0.075 * kScale },
-    { lat: 0.94, startU: 0.86, endU: 0.99, widthFrac: 0.080 * kScale }
+    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
+    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
   ];
 
   ctx.save();
@@ -2013,7 +2118,7 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
       const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
       ctx.lineWidth = Math.max(0.25, localWidth * ch.widthFrac * env);
 
-      const alpha = 0.85 * Math.pow(Math.sin(Math.min(1.0, t / 0.30) * (Math.PI * 0.5)), 1.8);
+      const alpha = 0.55 * Math.pow(Math.sin(Math.min(1.0, t / 0.30) * (Math.PI * 0.5)), 1.8);
       ctx.strokeStyle = "rgba(0, 0, 0, " + alpha.toFixed(3) + ")";
 
       const b1x = p1.lx + (p1.rx - p1.lx) * ch.lat;
@@ -2044,7 +2149,7 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
   const tex = getCloudySumiTextureCanvas();
   if (tex) {
     ctx.save();
-    ctx.globalAlpha = (toneMode === "dark-sumi") ? 0.20 : 0.42;
+    ctx.globalAlpha = (toneMode === "dark-sumi") ? 0.08 : 0.12;
     const pat = ctx.createPattern(tex, "repeat");
     if (pat) {
       ctx.fillStyle = pat;
@@ -2065,8 +2170,8 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
     lightC0 = "rgba(145, 24, 20, 0.20)";
     lightC1 = "rgba(145, 24, 20, 0.08)";
     lightC2 = "rgba(145, 24, 20, 0)";
-    poolC0  = "rgba(115, 14, 12, 0.68)";
-    poolC1  = "rgba(115, 14, 12, 0.25)";
+    poolC0  = "rgba(115, 14, 12, 0.14)";
+    poolC1  = "rgba(115, 14, 12, 0.06)";
     poolC2  = "rgba(115, 14, 12, 0)";
   } else if (toneMode === "dark-sumi") {
     heavyC0 = "rgba(255, 255, 255, 0.25)";
@@ -2075,8 +2180,8 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
     lightC0 = "rgba(255, 255, 255, 0.12)";
     lightC1 = "rgba(255, 255, 255, 0.05)";
     lightC2 = "rgba(255, 255, 255, 0)";
-    poolC0  = "rgba(255, 255, 255, 0.25)";
-    poolC1  = "rgba(255, 255, 255, 0.10)";
+    poolC0  = "rgba(255, 255, 255, 0.14)";
+    poolC1  = "rgba(255, 255, 255, 0.06)";
     poolC2  = "rgba(255, 255, 255, 0)";
   } else {
     heavyC0 = "rgba(6, 5, 4, 0.45)";
@@ -2085,33 +2190,22 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
     lightC0 = "rgba(42, 36, 31, 0.20)";
     lightC1 = "rgba(35, 30, 26, 0.08)";
     lightC2 = "rgba(35, 30, 26, 0)";
-    poolC0  = "rgba(4, 3, 2, 0.68)";
-    poolC1  = "rgba(4, 3, 2, 0.25)";
+    poolC0  = "rgba(4, 3, 2, 0.06)";
+    poolC1  = "rgba(4, 3, 2, 0.02)";
     poolC2  = "rgba(4, 3, 2, 0)";
   }
 
-  // 2. Soft cloudy wash variations along the stroke spine
-  const stepWash = Math.max(3, Math.floor(pts.length / 12));
-  for (let i = 0; i <= limitIdx; i += stepWash) {
-    const p = pts[i];
-    const isHeavy = (p.poolWeight > 0.65 || p.pressure > 1.15);
-    const rad = r * (isHeavy ? 1.40 : 1.10);
-    const washGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
-
-    if (isHeavy) {
-      washGrad.addColorStop(0, heavyC0);
-      washGrad.addColorStop(0.65, heavyC1);
-      washGrad.addColorStop(1, heavyC2);
-    } else {
-      washGrad.addColorStop(0, lightC0);
-      washGrad.addColorStop(0.70, lightC1);
-      washGrad.addColorStop(1, lightC2);
-    }
-    ctx.fillStyle = washGrad;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
-    ctx.fill();
+  // 2. Soft continuous centerline wash along the stroke spine
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i <= limitIdx; i++) {
+    ctx.lineTo(pts[i].x, pts[i].y);
   }
+  ctx.lineWidth = r * 1.35;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = lightC1;
+  ctx.stroke();
 
   // 3. Soft radial pause pooling
   // Entry press belly
@@ -2120,13 +2214,13 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
   const p0 = pts[0];
   const entryMidX = (p0.x + pEntry.x) * 0.5;
   const entryMidY = (p0.y + pEntry.y) * 0.5;
-  const entryGrad = ctx.createRadialGradient(entryMidX, entryMidY, 0, entryMidX, entryMidY, r * 1.25);
+  const entryGrad = ctx.createRadialGradient(entryMidX, entryMidY, 0, entryMidX, entryMidY, r * 2.2);
   entryGrad.addColorStop(0, poolC0);
   entryGrad.addColorStop(0.60, poolC1);
   entryGrad.addColorStop(1, poolC2);
   ctx.fillStyle = entryGrad;
   ctx.beginPath();
-  ctx.arc(entryMidX, entryMidY, r * 1.25, 0, Math.PI * 2);
+  ctx.arc(entryMidX, entryMidY, r * 2.2, 0, Math.PI * 2);
   ctx.fill();
 
   // Corner shoulders
@@ -2136,13 +2230,13 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
       const shiftSign = cf.turnSign >= 0 ? 1 : -1;
       const sx = cp.x + cp.nx * shiftSign * (r * 0.25);
       const sy = cp.y + cp.ny * shiftSign * (r * 0.25);
-      const cornerGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 1.35);
+      const cornerGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 2.2);
       cornerGrad.addColorStop(0, poolC0);
       cornerGrad.addColorStop(0.65, poolC1);
       cornerGrad.addColorStop(1, poolC2);
       ctx.fillStyle = cornerGrad;
       ctx.beginPath();
-      ctx.arc(sx, sy, r * 1.35, 0, Math.PI * 2);
+      ctx.arc(sx, sy, r * 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -2150,13 +2244,13 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
   // Hook resting heel
   if (compiled.hookFeature && limitIdx >= compiled.hookFeature.index) {
     const hp = pts[compiled.hookFeature.index];
-    const hookGrad = ctx.createRadialGradient(hp.x, hp.y, 0, hp.x, hp.y, r * 1.45);
+    const hookGrad = ctx.createRadialGradient(hp.x, hp.y, 0, hp.x, hp.y, r * 2.2);
     hookGrad.addColorStop(0, poolC0);
     hookGrad.addColorStop(0.65, poolC1);
     hookGrad.addColorStop(1, poolC2);
     ctx.fillStyle = hookGrad;
     ctx.beginPath();
-    ctx.arc(hp.x, hp.y, r * 1.45, 0, Math.PI * 2);
+    ctx.arc(hp.x, hp.y, r * 2.2, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -2165,13 +2259,13 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
     const naIdx = Math.floor(pts.length * 0.68);
     if (limitIdx >= naIdx) {
       const np = pts[naIdx];
-      const naGrad = ctx.createRadialGradient(np.x, np.y, 0, np.x, np.y, r * 1.50);
+      const naGrad = ctx.createRadialGradient(np.x, np.y, 0, np.x, np.y, r * 2.2);
       naGrad.addColorStop(0, poolC0);
       naGrad.addColorStop(0.65, poolC1);
       naGrad.addColorStop(1, poolC2);
       ctx.fillStyle = naGrad;
       ctx.beginPath();
-      ctx.arc(np.x, np.y, r * 1.50, 0, Math.PI * 2);
+      ctx.arc(np.x, np.y, r * 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -2197,20 +2291,9 @@ function renderPartialCompiledStroke(targetCtx, compiled, endIdx, options = {}) 
   bufferCtx.shadowColor = "rgba(20, 16, 13, 0.38)";
   bufferCtx.shadowBlur = 1.8;
 
-  const hf = compiled.hookFeature;
-  const heelIdx = hf ? (hf.heelIdx || Math.max(4, hf.index - 4)) : -1;
-
-  if (hf && limit > heelIdx) {
-    const stopIdx = (hf && hf.isDownLeftHook) ? Math.max(8, heelIdx - 5) : heelIdx;
-    bufferCtx.beginPath();
-    traceSmoothStrokeContour(bufferCtx, compiled, stopIdx, true);
-    bufferCtx.fill();
-    drawFleshyHookWedge(bufferCtx, compiled, limit, heelIdx);
-  } else {
-    bufferCtx.beginPath();
-    traceSmoothStrokeContour(bufferCtx, compiled, limit, false);
-    bufferCtx.fill();
-  }
+  bufferCtx.beginPath();
+  traceSmoothStrokeContour(bufferCtx, compiled, limit, false);
+  bufferCtx.fill();
 
   // If long falling sweep, carve kasure and draw feathery bristle hairs
   renderKasureAndFrayedBristles(bufferCtx, compiled, limit);

@@ -1177,6 +1177,7 @@ def compute_bboxes(
                 )
             )
             if is_flanking:
+                ast_node["is_flanking_container"] = True
                 c0["is_flanking"] = True
                 c0["path"] = f"{path}.0"
                 c0["role_label"] = "両脇"

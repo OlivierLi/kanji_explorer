@@ -2800,7 +2800,14 @@ def _allocate_strokes_recursive(
     total_expected = sum(expected_counts)
 
     node_op = ast_node.get("op")
-    is_sequential = node_op in ("⿱", "⿰", "⿳", "⿲") or node_op is None or lc in PRIMITIVE_STROKES
+    is_flanking_container = (
+        ast_node.get("is_flanking_container")
+        or any(c.get("is_flanking") or c.get("role_label") == "両脇" for c in ch_nodes)
+    )
+    is_sequential = (
+        not is_flanking_container
+        and (node_op in ("⿱", "⿰", "⿳", "⿲") or node_op is None or lc in PRIMITIVE_STROKES)
+    )
 
     if is_sequential and total_expected == len(p_strokes):
         # 同じ部品が並ぶ場合、片側だけのKanjiVG記号を先の子が
@@ -3134,7 +3141,7 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
     # 1.5 無名グループ（elem="" または None）の空間幾何マッチング
     for l in layers:
         lp = l.get("path", "")
-        if layer_strokes.get(lp):
+        if lp in layer_to_group:
             continue
         l_bbox = l.get("bbox", [0.0, 0.0, 1.0, 1.0])
         l_cx = l_bbox[0] + l_bbox[2] / 2
@@ -3169,7 +3176,8 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
             matched_group_ids.add(best_g["id"])
             best_g["path"] = lp
             layer_to_group[lp] = best_g
-            layer_strokes[lp] = list(best_g["all_s"])
+            if not layer_strokes.get(lp):
+                layer_strokes[lp] = list(best_g["all_s"])
             ast_node = nodes_by_path.get(lp)
             if ast_node and ast_node.get("children"):
                 _allocate_strokes_recursive(lp, ast_node, layer_strokes[lp], layer_strokes)
@@ -3184,7 +3192,9 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
                 if cp.startswith(lp + ".") and len(cp.split(".")) == len(lp.split(".")) + 1:
                     ch_s.extend(layer_strokes.get(cp, []))
             if ch_s:
-                layer_strokes[lp] = list(dict.fromkeys(ch_s))
+                sorted_s = list(dict.fromkeys(ch_s))
+                sorted_s.sort(key=lambda sid: int(re.search(r"-s(\d+)", sid).group(1)) if re.search(r"-s(\d+)", sid) else 0)
+                layer_strokes[lp] = sorted_s
 
     # 3. 単筆画末端ノードの順序ベース配分（未割り当て筆画の重複排除）
     for l in layers:
