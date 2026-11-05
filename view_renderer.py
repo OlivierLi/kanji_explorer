@@ -66,7 +66,16 @@ def render_side_by_side_html(
         mode = "kvg"
 
     # 1. 構文木・ベクターSVG分解
-    tree = ids_parser.decompose_character(canonical_char, max_depth=6, compute_bbox=True)
+    try:
+        tree = ids_parser.decompose_character(canonical_char, max_depth=6, compute_bbox=True)
+    except ValueError:
+        tree = {
+            "type": "char",
+            "char": canonical_char,
+            "raw_char": canonical_char,
+            "path": "0",
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+        }
     interactive_svg = glyph_service.build_interactive_ids_svg(tree)
     base_path = interactive_svg.get("base_path", "")
     layers = [l for l in interactive_svg.get("component_layers", []) if l.get("path") and l.get("path") != "0"]

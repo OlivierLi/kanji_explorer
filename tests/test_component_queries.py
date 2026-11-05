@@ -144,8 +144,33 @@ def test_component_lookup_executes_one_ranked_statement(database, usage):
         if usage:
             server.query_component_closure_db(database, '食')
         else:
-            server.query_component_matches_db(database, ['食'])
+            server.query_component_matches_db(database, ['食', '木'])
     finally:
         database.set_trace_callback(None)
     queries = [sql for sql in statements if 'WITH ranked' in sql]
     assert len(queries) == 1
+
+
+def test_multi_component_search_is_order_independent(database):
+    for mode in ('all', 'direct', 'indirect'):
+        ab = server.query_component_matches_db(database, ['食', '木'], mode=mode)
+        ba = server.query_component_matches_db(database, ['木', '食'], mode=mode)
+        assert ab == ba
+    direct = server.query_component_matches_db(database, ['食', '木'], mode='direct')
+    indirect = server.query_component_matches_db(database, ['食', '木'], mode='indirect')
+    assert [r['char'] for r in direct['results']] == ['甲']
+    assert [r['char'] for r in indirect['results']] == ['乙']
+    assert direct['direct_total'] == 1
+    assert direct['indirect_total'] == 1
+
+
+def test_equivalent_component_tie_break_orders_by_via_char_before_component(database, monkeypatch):
+    database.execute('DELETE FROM component_closure')
+    database.executemany('INSERT INTO component_closure VALUES (?, ?, ?, ?, ?, ?)', [
+        ('口', '甲', 0, '乙', 2, 1),
+        ('囗', '甲', 0, '丁', 2, 1),
+    ])
+    monkeypatch.setattr(ids_parser, 'EQUIV_GROUPS', {'口': ['囗'], '囗': ['口']})
+    res = server.query_component_matches_db(database, ['口'])
+    assert len(res['results']) == 1
+    assert res['results'][0]['via_char'] == '丁'

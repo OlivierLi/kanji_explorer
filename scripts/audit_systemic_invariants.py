@@ -44,17 +44,30 @@ PATH_CHECKS = {
 }
 
 
+def _has_semicolon_child(node: dict) -> bool:
+    for child in node.get('children') or ():
+        if child.get('char') == ';' or child.get('raw_char') == ';' or _has_semicolon_child(child):
+            return True
+    return False
+
+
 def audit(database: Path) -> dict:
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
         conn.execute('BEGIN')
         integrity = conn.execute('PRAGMA integrity_check').fetchone()[0]
         path_checks = {name: conn.execute(sql).fetchone()[0] for name, sql in PATH_CHECKS.items()}
         paths = conn.execute('SELECT count(*) FROM component_closure').fetchone()[0]
-        chars = [r[0] for r in conn.execute('SELECT char FROM characters WHERE grade IS NOT NULL ORDER BY char')]
+        chars = conn.execute(
+            'SELECT char, chise_ids FROM characters WHERE grade IS NOT NULL ORDER BY grade, char'
+        ).fetchall()
 
-    mutations, unstable, invalid_holes, missing_glyphs = [], [], [], []
+    mutations, unstable, invalid_holes, missing_glyphs, corrupted_primary_ids = [], [], [], [], []
     holes_checked = 0
-    for char in chars:
+    for char, chise_ids in chars:
+        primary_ids = chise_ids or ids_parser.get_character_ids(char) or char
+        primary_tree = ids_parser.decompose_character(primary_ids, max_depth=6, compute_bbox=False)
+        if _has_semicolon_child(primary_tree):
+            corrupted_primary_ids.append(char)
         tree = ids_parser.decompose_character(char, max_depth=6, compute_bbox=True)
         original = copy.deepcopy(tree)
         first = glyph_service.build_interactive_ids_svg(tree)
@@ -82,9 +95,13 @@ def audit(database: Path) -> dict:
         'unstable_print_renders': unstable,
         'invalid_hole_parents': invalid_holes,
         'missing_graded_glyphs': missing_glyphs,
+        'corrupted_primary_ids': corrupted_primary_ids,
     }
-    result['passed'] = (integrity == 'ok' and not any(path_checks.values())
-                        and not any([mutations, unstable, invalid_holes, missing_glyphs]))
+    result['passed'] = (
+        integrity == 'ok'
+        and not any(path_checks.values())
+        and not any([mutations, unstable, invalid_holes, missing_glyphs, corrupted_primary_ids])
+    )
     return result
 
 

@@ -64,7 +64,7 @@ def test_curved_contours_are_not_declared_empty_from_control_polygons():
     assert glyphs._island_intersects_clips(island, [[.4,.4,.2,.1]])
 
 
-@pytest.mark.parametrize('char', list('道画進埴飜操殖遼欄遭植値運連遵直置'))
+@pytest.mark.parametrize('char', list('道画進埴飜操殖遼欄遭植値運連遵直置䯂䳗'))
 def test_holes_are_attached_to_contours_that_contain_them(char):
     from geometry import contains_polygon
     islands = glyphs._extract_ink_islands(glyphs.get_jigmo_path(char))
@@ -72,3 +72,16 @@ def test_holes_are_attached_to_contours_that_contain_them(char):
     for island in islands:
         if island['is_linear']:
             assert all(contains_polygon(island['polygon'], hole) for hole in island['hole_polygons'])
+
+
+@pytest.mark.parametrize('char,path,clip', [
+    ('䯂', '0.1.1.1', [628 / 1024, 546 / 1024, 61 / 1024, 38 / 1024]),
+    ('䳗', '0.0.1', [274 / 1024, 345 / 1024, 96 / 1024, 60 / 1024]),
+])
+def test_reversed_winding_strokes_become_standalone_islands(char, path, clip):
+    tree = ids_parser.decompose_character(char, max_depth=6, compute_bbox=True)
+    visual = glyphs.build_interactive_ids_svg(tree)
+    whole, masks = raster.compute_all_layer_masks(char, visual, size=256)
+    region = raster.create_clip_mask([clip], size=256)
+    assert (whole & region).sum() > 50
+    assert (masks[path] & region).sum() > 50

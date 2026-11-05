@@ -767,6 +767,14 @@ class TokenList(list):
         self.region_tags: list[str] = region_tags if region_tags is not None else []
 
 
+_VARIATION_SELECTOR_RE = re.compile(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]")
+
+
+def strip_variation_selectors(text: str) -> str:
+    """異体字セレクタ (VS1-VS16, VS17-VS256) を除去する."""
+    return _VARIATION_SELECTOR_RE.sub("", text)
+
+
 def tokenize_ids(
     ids_str: str,
     normalize: bool = True,
@@ -777,7 +785,7 @@ def tokenize_ids(
     末尾の [GJKTV...] 地域タグを除去し保存します。
     """
     clean_str, tags = extract_region_tags(ids_str)
-    clean_str = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", clean_str)
+    clean_str = strip_variation_selectors(clean_str)
     pattern = re.compile(r"&[^;\s]+;|[^\s]")
     raw_tokens = pattern.findall(clean_str)
 
@@ -1842,7 +1850,7 @@ def expand_tree(
 
 def resolve_codepoint_notation(token: str) -> str | None:
     """Resolve Unicode scalar notation; distinguish invalid notation from text."""
-    token = token.strip()
+    token = strip_variation_selectors(token).strip()
     match = re.fullmatch(r"(?:[Uu](?:\+|\s+)?|0[xX])([0-9a-fA-F]+)", token)
     if match is None:
         match = re.fullmatch(r"([0-9a-fA-F]{4,6})", token)
@@ -1858,13 +1866,26 @@ def resolve_codepoint_notation(token: str) -> str | None:
 
 def resolve_entity_notation(token: str) -> str | None:
     """Accept bare/wrapped CHISE names without truncating them into letters."""
-    token = token.strip()
-    wrapped = token.startswith('&') and len(token) > 1
-    body = token[1:].removesuffix(';') if wrapped else token
-    match = re.fullmatch(r"(CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-(.+)", body, re.I)
+    token = strip_variation_selectors(token).strip()
+    wrapped = token.startswith("&")
+    body = token[1:].removesuffix(";") if wrapped else token
+    if wrapped and (";" in body or "&" in body):
+        toks = tokenize_ids(token, normalize=False)
+        if len(toks) > 1 and all(
+            re.fullmatch(r"&[A-Za-z0-9_+.'-]+;", t) is not None
+            or (len(t) == 1 and (ord(t) >= 128 or t in ("?", "|")))
+            for t in toks
+        ):
+            return None
+        raise ValueError(f"不正な実体参照表記: {token}")
+    match = re.fullmatch(
+        r"(CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-([A-Za-z0-9_+.'-]+)",
+        body,
+        re.I,
+    )
     if not wrapped and match is None:
         return None
-    if not body or any(char.isspace() for char in body):
+    if not body or any(char.isspace() for char in body) or not re.fullmatch(r"[A-Za-z0-9_+.'-]+", body):
         raise ValueError(f"不正な実体参照表記: {token}")
     if match is not None:
         prefix, suffix = match.groups()
@@ -1885,14 +1906,17 @@ def decompose_character(
 ) -> dict[str, Any]:
     """文字または IDS 文字列を受け取り、指定深度まで再帰展開した構文木を返す便利関数."""
     clean_input, region_tags = extract_region_tags(char_or_ids)
-    clean_input = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", clean_input)
+    clean_input = strip_variation_selectors(clean_input)
 
     resolved = resolve_codepoint_notation(clean_input) or resolve_entity_notation(clean_input)
     if resolved is not None:
         clean_input = resolved
 
     is_single = len(clean_input) == 1 or (
-        clean_input.startswith("&") and clean_input.endswith(";")
+        clean_input.startswith("&")
+        and clean_input.endswith(";")
+        and ";" not in clean_input[1:-1]
+        and "&" not in clean_input[1:-1]
     )
 
     canonical_char: str | None = None

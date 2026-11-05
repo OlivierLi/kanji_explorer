@@ -85,5 +85,23 @@ def test_packaged_closure_promotes_alternative_direct_components():
         with gzip.open(build_db.DB_PATH.with_suffix('.db.gz'), 'rb') as source, path.open('wb') as target:
             shutil.copyfileobj(source, target)
         with sqlite3.connect(path) as conn:
-            assert conn.execute("SELECT min_depth,is_direct,via_char FROM component_closure WHERE target_char='蛍' AND component='𭕄'").fetchone() == (1, 1, '')
+            direct_expected = ["𰃮", "単", "巣", "脳", "獣", "蛍", "学", "栄", "覚", "労", "営"]
+            for ch in direct_expected:
+                assert conn.execute(
+                    "SELECT min_depth,is_direct,via_char FROM component_closure WHERE target_char=? AND component='𭕄'",
+                    (ch,),
+                ).fetchone() == (1, 1, '')
+            indirect_expected = {
+                "戦": ("単", 2),
+                "弾": ("単", 2),
+                "禅": ("単", 2),
+                "巌": ("厳", 2),
+                "撹": ("覚", 3),
+                "𰴣": ("𰃮", 2),
+            }
+            for ch, (via, depth) in indirect_expected.items():
+                assert conn.execute(
+                    "SELECT min_depth,is_direct,via_char FROM component_closure WHERE target_char=? AND component='𭕄'",
+                    (ch,),
+                ).fetchone() == (depth, 0, via)
             assert conn.execute("SELECT count(*) FROM component_edges e JOIN component_closure c ON c.target_char=e.parent_char AND c.component=e.child_char WHERE c.is_direct=0").fetchone()[0] == 0

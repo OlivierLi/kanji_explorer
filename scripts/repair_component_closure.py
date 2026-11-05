@@ -4,6 +4,7 @@ Run from the repository root. Back up the database/package under /tmp, update
 only component_closure in one transaction, and package a consistent snapshot.
 """
 from collections import defaultdict
+from contextlib import closing
 import gzip
 from pathlib import Path
 import shutil
@@ -52,8 +53,8 @@ def repair(db_path=build_db.DB_PATH):
     db_path = Path(db_path)
     package = db_path.with_suffix(db_path.suffix + '.gz')
     backup_dir = Path(tempfile.mkdtemp(prefix='kanji-component-closure-'))
-    with sqlite3.connect(db_path) as conn:
-        with sqlite3.connect(backup_dir / db_path.name) as target:
+    with closing(sqlite3.connect(db_path)) as conn:
+        with closing(sqlite3.connect(backup_dir / db_path.name)) as target:
             conn.backup(target)
         if package.exists():
             shutil.copy2(package, backup_dir / package.name)
@@ -61,7 +62,7 @@ def repair(db_path=build_db.DB_PATH):
         if conn.execute('PRAGMA integrity_check').fetchone() != ('ok',):
             raise RuntimeError('データベース整合性検査に失敗しました')
         snapshot = backup_dir / 'repaired.db'
-        with sqlite3.connect(snapshot) as target:
+        with closing(sqlite3.connect(snapshot)) as target:
             conn.backup(target)
     temporary = None
     try:

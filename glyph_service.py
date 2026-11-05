@@ -523,10 +523,11 @@ def _extract_ink_islands(base_path: str) -> list[dict[str, Any]]:
             best["hole_boxes"].append(hbox)
             best["hole_polygons"].append(h["polygon"])
         else:
-            if outers:
-                outers[0]["holes"].append(h["d"])
-                outers[0]["hole_boxes"].append(hbox)
-                outers[0]["hole_polygons"].append(h["polygon"])
+            h["holes"] = []
+            h["hole_boxes"] = []
+            h["hole_polygons"] = []
+            h["area"] = abs(h["area"])
+            outers.append(h)
 
     islands: list[dict[str, Any]] = []
     for i, o in enumerate(outers):
@@ -1017,7 +1018,7 @@ def _assign_ink_islands_to_tree(
     if (op == "⿴" and len(children) == 2
             and (children[0].get("char") or children[0].get("raw_char")) in ("口", "囗")
             and (children[1].get("char") or children[1].get("raw_char")) in ("一", "二")):
-        count = 2 if children[1].get("char") == "二" else 1
+        count = 2 if (children[1].get("char") or children[1].get("raw_char")) == "二" else 1
         bx, by, bw, bh = tree_node["bbox"]
         for island in islands:
             holes = sorted([h for h in island.get("hole_boxes", [])
@@ -1063,6 +1064,8 @@ def _assign_ink_islands_to_tree(
                 frame.append([left, start, right - left, bar[1] - start])
                 start = bar[1] + bar[3]
             frame.append([left, start, right - left, y2 - start])
+            children[0]["_islands"] = [island]
+            children[0]["_has_shared_island"] = True
             children[0]["clip_rects"] = frame
             children[0]["hit_rects"] = frame
             break
@@ -1223,8 +1226,12 @@ def get_glyph_svg(token: str, recursive_tree: dict[str, Any] | None = None) -> s
     token_clean = token.strip()
     if not token_clean:
         return ""
-    token_clean = (ids_parser.resolve_codepoint_notation(token_clean)
-                   or ids_parser.resolve_entity_notation(token_clean) or token_clean)
+    try:
+        resolved = (ids_parser.resolve_codepoint_notation(token_clean)
+                    or ids_parser.resolve_entity_notation(token_clean))
+    except ValueError:
+        resolved = None
+    token_clean = resolved or token_clean
 
     # 1. 単一文字または正規化エンティティがJigmoフォントで描画可能な場合
     path_d = get_jigmo_path(token_clean) or get_jigmo_path(ids_parser.normalize_entity(token_clean))
@@ -2727,6 +2734,19 @@ def _estimate_node_strokes(node: dict[str, Any]) -> int:
     return 1
 
 
+def _set_layer_strokes(
+    path: str,
+    strokes: list[str],
+    layer_strokes: dict[str, list[str]],
+) -> None:
+    stroke_ids = set(strokes)
+    prefix = path + "."
+    for descendant in list(layer_strokes):
+        if descendant.startswith(prefix) and not set(layer_strokes[descendant]).issubset(stroke_ids):
+            del layer_strokes[descendant]
+    layer_strokes[path] = strokes
+
+
 def _allocate_strokes_recursive(
     lp: str,
     ast_node: dict[str, Any] | None,
@@ -2750,8 +2770,8 @@ def _allocate_strokes_recursive(
             and len(p_strokes) == 3 + _estimate_node_strokes(ch_nodes[1])):
         p0 = f"{lp}.0"
         p1 = f"{lp}.1"
-        layer_strokes[p0] = [p_strokes[0], p_strokes[1], p_strokes[-1]]
-        layer_strokes[p1] = p_strokes[2:-1]
+        _set_layer_strokes(p0, [p_strokes[0], p_strokes[1], p_strokes[-1]], layer_strokes)
+        _set_layer_strokes(p1, p_strokes[2:-1], layer_strokes)
         _allocate_strokes_recursive(p0, ch_nodes[0], layer_strokes[p0], layer_strokes)
         _allocate_strokes_recursive(p1, ch_nodes[1], layer_strokes[p1], layer_strokes)
         return
@@ -2796,14 +2816,9 @@ def _allocate_strokes_recursive(
             if repeated and layer_strokes.get(child_p) != c_slice:
                 # 新しい親の筆画内で有効な対応は保存する。包含構造の子は
                 # 逐次配分では再構築できないため、全削除してはならない。
-                slice_ids = set(c_slice)
-                for descendant in list(layer_strokes):
-                    if (descendant.startswith(child_p + ".")
-                            and not set(layer_strokes[descendant]).issubset(slice_ids)):
-                        del layer_strokes[descendant]
-                layer_strokes[child_p] = c_slice
-            elif not layer_strokes.get(child_p):
-                layer_strokes[child_p] = c_slice
+                _set_layer_strokes(child_p, c_slice, layer_strokes)
+            elif not layer_strokes.get(child_p) or not set(layer_strokes[child_p]).issubset(set(p_strokes)):
+                _set_layer_strokes(child_p, c_slice, layer_strokes)
             _allocate_strokes_recursive(child_p, c_node, layer_strokes[child_p], layer_strokes)
     else:
         for i, c_node in enumerate(ch_nodes):
@@ -3155,6 +3170,9 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
             best_g["path"] = lp
             layer_to_group[lp] = best_g
             layer_strokes[lp] = list(best_g["all_s"])
+            ast_node = nodes_by_path.get(lp)
+            if ast_node and ast_node.get("children"):
+                _allocate_strokes_recursive(lp, ast_node, layer_strokes[lp], layer_strokes)
 
     # 2. 複合親ノードへの子筆画ボトムアップ伝播
     for l in reversed(layers):
@@ -3223,6 +3241,10 @@ def extract_kanjivg_stroke_layers(char: str, tree: dict[str, Any] | None = None)
                     layer_strokes[lp] = unassigned_contained
                 elif not sibling_assigned:
                     layer_strokes[lp] = contained
+                if layer_strokes.get(lp):
+                    ast_node = nodes_by_path.get(lp)
+                    if ast_node and ast_node.get("children"):
+                        _allocate_strokes_recursive(lp, ast_node, layer_strokes[lp], layer_strokes)
 
     # クリーンアップ: JSONシリアライズ不可な循環参照 'parent' を削除
     def remove_parent_refs(g: dict[str, Any]) -> None:

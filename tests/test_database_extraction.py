@@ -82,3 +82,43 @@ def test_readonly_database_uri_escapes_special_path_characters(packaged_database
         assert server.get_db_connection().execute('SELECT value FROM example').fetchone()[0] == '完成'
     finally:
         server.close_db_connection()
+
+
+def test_repair_review_metadata_scopes_wiktionary_pos_and_cleans_temp_package(tmp_path, monkeypatch):
+    from scripts import repair_review_metadata
+
+    path = tmp_path / 'review.db'
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE characters (char, ja_on, ja_kun);
+            INSERT INTO characters VALUES ('嫫', 'MO', 'しこめ');
+            CREATE TABLE words (lemma, pos, source);
+            INSERT INTO words VALUES ('大切', '動詞', 'Wiktionary');
+            INSERT INTO words VALUES ('大切', '動詞', '統合辞書');
+        """)
+    monkeypatch.setattr(
+        repair_review_metadata.build_db,
+        'parse_unihan',
+        lambda: {'嫫': {'kJapanese': 'モ ボ しこめ', 'kJapaneseOn': 'BO MO', 'kJapaneseKun': 'SHIKOME'}},
+    )
+    monkeypatch.setattr(
+        repair_review_metadata,
+        'load_wiktionary_definitions',
+        lambda: {'大切': {'pos': '形容動詞', 'definition': '重要'}},
+    )
+    result = repair_review_metadata.repair(path)
+    assert result['reading_rows'] == 1
+    assert result['word_rows'] == 1
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute('SELECT pos, source FROM words ORDER BY source').fetchall()
+        assert rows == [('形容動詞', 'Wiktionary'), ('動詞', '統合辞書')]
+    assert path.with_suffix('.db.gz').exists()
+    assert not list(tmp_path.glob('*.tmp'))
+
+    def fail_copy(_src, _dst):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(repair_review_metadata.shutil, 'copyfileobj', fail_copy)
+    with pytest.raises(OSError, match='disk full'):
+        repair_review_metadata.repair(path)
+    assert not list(tmp_path.glob('*.tmp'))

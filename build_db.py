@@ -694,32 +694,47 @@ def build_database() -> None:
 
     # 3. component_closure における component = '𭕄' の検証
     print("\n3. 構成要素「𭕄」の逆引き検索（component_closure）の検証:")
-    cur.execute("""
-    SELECT target_char, is_direct, via_char, min_depth
-    FROM component_closure
-    WHERE component = '𭕄' AND target_char IN ('𰃮', '単', '巣', '脳', '獣', '蛍', '学', '栄', '覚', '労', '営')
-    ORDER BY is_direct DESC, target_char ASC;
-    """)
+    direct_expected = ["𰃮", "単", "巣", "脳", "獣", "蛍", "学", "栄", "覚", "労", "営"]
+    indirect_expected = {
+        "戦": ("単", 2),
+        "弾": ("単", 2),
+        "禅": ("単", 2),
+        "巌": ("厳", 2),
+        "撹": ("覚", 3),
+        "𰴣": ("𰃮", 2),
+    }
+    target_chars = tuple(direct_expected) + tuple(indirect_expected)
+    placeholders = ", ".join("?" for _ in target_chars)
+    cur.execute(
+        f"""
+        SELECT target_char, is_direct, via_char, min_depth
+        FROM component_closure
+        WHERE component = '𭕄' AND target_char IN ({placeholders})
+        ORDER BY is_direct DESC, target_char ASC;
+        """,
+        target_chars,
+    )
     closure_results = cur.fetchall()
     results_dict = {r[0]: (r[1], r[2], r[3]) for r in closure_results}
 
-    # 直接構成要素の検証
-    direct_expected = ["𰃮", "単", "巣", "脳", "獣"]
+    # 直接構成要素の検証（cjkvi-ids 等による代替直接分解の昇格を含む）
     print("  直接含む文字（is_direct=1）:")
     for ch in direct_expected:
         assert ch in results_dict, f"直接結果に {ch} が含まれていません"
         is_direct, via, depth = results_dict[ch]
         assert is_direct == 1, f"{ch} の is_direct が 1 ではありません ({is_direct})"
+        assert via == "", f"{ch} の via_char が空文字列ではありません ('{via}')"
+        assert depth == 1, f"{ch} の min_depth が 1 ではありません ({depth})"
         print(f"    {ch}: is_direct={is_direct}, via_char='{via}', min_depth={depth}")
 
-    # 間接構成要素（𰃮経由）の検証
-    indirect_expected = ["蛍", "学", "栄", "覚", "労", "営"]
-    print("  間接的に含む文字（via_char='𰃮', is_direct=0）:")
-    for ch in indirect_expected:
+    # 間接構成要素の検証
+    print("  間接的に含む文字（is_direct=0）:")
+    for ch, (expected_via, expected_depth) in indirect_expected.items():
         assert ch in results_dict, f"間接結果に {ch} が含まれていません"
         is_direct, via, depth = results_dict[ch]
-        assert via == "𰃮", f"{ch} の via_char が '𰃮' ではありません ('{via}')"
         assert is_direct == 0, f"{ch} の is_direct が 0 ではありません ({is_direct})"
+        assert depth >= 2 and depth == expected_depth, f"{ch} の min_depth が {expected_depth} ではありません ({depth})"
+        assert via and via == expected_via, f"{ch} の via_char が '{expected_via}' ではありません ('{via}')"
         print(f"    {ch}: is_direct={is_direct}, via_char='{via}', min_depth={depth}")
 
     print("  -> 合格: 「𭕄」を含む漢字の直接・間接検索インデックスが期待通り動作しています。")

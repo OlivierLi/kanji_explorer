@@ -57,12 +57,28 @@ const flush = async()=>{await Promise.resolve();await Promise.resolve();};
     const p=run('inspectCharacter(failedQuery)');queue.shift().resolve({ok:false});await p;
     assert.equal(elements.get('attrCodepoint').textContent,'未詳');
   }
-  for (const query of ['U+41','u2d544','U+110000','U+ZZZZ','0x110000']) {
+  for (const query of ['U+41','u2d544','U+110000','U+ZZZZ','0x110000','&U-i003+2D928;','&U+4E06;',"&M-12345';",'&A-IWDSU+201A2;']) {
     context.notation=query;
     const p=run('inspectCharacter(notation)');const response=queue.shift();
     assert.equal(new URLSearchParams(response.url.split('?')[1]).get('q'),query);
     response.resolve({ok:false});await p;
   }
+  // Entity/codepoint helpers and history normalization after canonical resolution.
+  assert.equal(run(`getCodepointHex('u2d544')`),'U+2D544');
+  assert.equal(run(`getCodepointHex('4E00')`),'U+4E00');
+  assert.equal(run(`getCodepointHex('CDP-8BD9')`),'CDP-8BD9');
+  assert.equal(run(`getCodepointHex('&U-i003+2D928;')`),'U-i003+2D928');
+  assert.match(run(`renderGlyphHTML('CDP-8BD9')`),/\/api\/glyph\?c=%26CDP-8BD9%3B/);
+  run(`state.history=['中'];state.historyIndex=0`);
+  const cpResolve=run(`inspectCharacter('U+86CD')`);queue.shift().resolve(ok(data('蛍')));await cpResolve;
+  assert.deepEqual(Array.from(run('state.history')),['中','蛍']);assert.equal(run('state.historyIndex'),1);
+  const cpDedup=run(`inspectCharacter('U+86CD')`);queue.shift().resolve(ok(data('蛍')));await cpDedup;
+  assert.deepEqual(Array.from(run('state.history')),['中','蛍']);assert.equal(run('state.historyIndex'),1);
+  // Failed /api/char requests must not overwrite findChips or cascade find/words searches.
+  run(`state.findChips=new Set(['蛍']);globalThis.findCalls=0;globalThis.wordsCalls=0;executeFindSearch=()=>{globalThis.findCalls++};loadWordsForCurrentKanji=()=>{globalThis.wordsCalls++}`);
+  const failedNotation=run(`inspectCharacter('U+110000')`);queue.shift().resolve({ok:false});await failedNotation;
+  assert.deepEqual(Array.from(run('state.findChips')),['蛍']);assert.equal(run('globalThis.findCalls'),0);assert.equal(run('globalThis.wordsCalls'),0);
+  run(`executeFindSearch=()=>{};loadWordsForCurrentKanji=()=>{}`);
   const failed=run(`inspectCharacter('月')`);queue.shift().reject(Error('offline'));await failed;assert.equal(run('state.charData.unavailable'),true);
   // Reverse lookup owns an independent generation, including delayed JSON and clear.
   run(`state.findChips=new Set(['木'])`);const first=run('actualFind()');let resolveFindJson;queue.shift().resolve({ok:true,json:()=>new Promise(r=>resolveFindJson=r)});await flush();

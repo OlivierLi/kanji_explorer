@@ -94,6 +94,20 @@ def test_failed_query_releases_its_snapshot(database):
     assert server.query_component_matches_db(reader, ['木'])['total'] == 2
 
 
+def test_failed_query_inside_outer_transaction_or_after_rollback_preserves_original_error(database):
+    reader, _ = database
+    reader.execute('BEGIN')
+
+    def fail_and_rollback():
+        reader.rollback()
+        raise RuntimeError('original failure')
+
+    reader.after_count = fail_and_rollback
+    with pytest.raises(RuntimeError, match='original failure'):
+        server.query_component_matches_db(reader, ['木'])
+    assert not reader.in_transaction
+
+
 
 def test_usage_categories_share_the_outer_snapshot(database):
     reader, writer = database

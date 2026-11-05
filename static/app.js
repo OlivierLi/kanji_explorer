@@ -93,12 +93,30 @@ function escapeAttr(str) {
 // =============================================================================
 
 /**
+ * コードポイント表記（U+XXXX, uXXXX, 0xXXXX, 4〜6桁16進数）かどうかを判定
+ */
+function isCodepointNotation(token) {
+  if (!token || typeof token !== "string") return false;
+  return /^(?:[Uu][+\s]|0[xX])/.test(token)
+    || /^(?:[Uu][0-9a-fA-F]{1,6}|[0-9a-fA-F]{4,6})$/.test(token);
+}
+
+/**
+ * CHISE外字実体参照表記（&...; または CDP-XXXX 等の裸表記）かどうかを判定
+ */
+function isEntityNotation(token) {
+  if (!token || typeof token !== "string") return false;
+  return /^&[0-9A-Za-z_+.'-]+;?$/.test(token)
+    || /^(?:CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-[0-9A-Za-z_+.'-]+$/i.test(token);
+}
+
+/**
  * CHISE外字実体参照やUnicode文字を適切なHTML要素として描画
  */
 function renderGlyphHTML(token, cssClass = "") {
   if (!token) return "";
-  const isEntity = token.startsWith("&");
-  const entityToken = isEntity && !token.endsWith(";") ? `${token};` : token;
+  const isEntity = isEntityNotation(token);
+  const entityToken = isEntity ? `&${token.replace(/^&|;$/g, "")};` : token;
   const safeCls = escapeAttr(cssClass);
   const safeTok = escapeAttr(entityToken);
   if (isEntity) {
@@ -113,18 +131,34 @@ function renderGlyphHTML(token, cssClass = "") {
  */
 function getCodepointHex(char) {
   if (!char) return "";
-  if (char.startsWith("&")) {
-    return char.replace(/^&|;$/g, "");
+  if (isEntityNotation(char)) {
+    const body = char.replace(/^&|;$/g, "");
+    const match = body.match(/^(CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-(.+)$/i);
+    if (match) {
+      const parts = match[2].split("-").map(p => /^[0-9a-fA-F]{4,6}$/.test(p) ? p.toUpperCase() : p);
+      return `${match[1].toUpperCase()}-${parts.join("-")}`;
+    }
+    return body;
   }
-  if (/^(?:U\+|0x)[0-9A-Fa-f]+$/i.test(char)) {
+  if (isCodepointNotation(char)) {
+    const m = char.match(/^(?:[Uu](?:\+|\s+)?|0[xX])([0-9a-fA-F]+)$/) || char.match(/^([0-9a-fA-F]{4,6})$/);
+    if (m) {
+      const cp = parseInt(m[1], 16);
+      if (cp <= 0x10FFFF && (cp < 0xD800 || cp > 0xDFFF)) {
+        return `U+${cp.toString(16).toUpperCase()}`;
+      }
+    }
     return char.toUpperCase();
   }
-  try {
-    const cp = char.codePointAt(0);
-    return `U+${cp.toString(16).toUpperCase()}`;
-  } catch (e) {
-    return char;
+  if (Array.from(char).length === 1) {
+    try {
+      const cp = char.codePointAt(0);
+      return `U+${cp.toString(16).toUpperCase()}`;
+    } catch (e) {
+      return char;
+    }
   }
+  return "未詳";
 }
 
 function tokenizeIds(idsStr) {
@@ -161,9 +195,8 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   const request = characterRequests.begin();
 
   const idcRegex = /^[⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿]/;
-  const isCodepoint = /^(?:[Uu][+\s]|0[xX])/.test(token)
-    || /^(?:[Uu][0-9a-fA-F]{1,6}|[0-9a-fA-F]{4,6})$/.test(token);
-  const isEntity = /^&[0-9A-Za-z_-]+;?$/.test(token) || /^(?:CDP|GT|MJ|M|C[1-7]|J90|CB|HZK|SW-JIGUGE)-/i.test(token);
+  const isCodepoint = isCodepointNotation(token);
+  const isEntity = isEntityNotation(token);
   const isIdc = idcRegex.test(token);
 
   let effectiveToken = token;
@@ -219,7 +252,7 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
       unavailable: true,
       meta: {
         char: effectiveToken, literal: effectiveToken,
-        codepoint: Array.from(effectiveToken).length === 1 ? getCodepointHex(effectiveToken) : "未詳",
+        codepoint: (!isCodepoint && !isEntity && !isIdc && Array.from(effectiveToken).length === 1) ? getCodepointHex(effectiveToken) : "未詳",
         tier: "情報取得不可", stroke_count: null, radical: "部首未詳",
         badges: ["文字情報を取得できませんでした。再度調査してください。"]
       },
@@ -232,8 +265,18 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
 
   if (!altIds) {
     state.currentChar = data.meta?.char || data.meta?.literal || effectiveToken;
-    state.findChips = new Set([state.currentChar]);
-    renderFindChips();
+    if (!data.unavailable && recordHistory && effectiveToken === token && state.historyIndex >= 0 && state.historyIndex < state.history.length) {
+      state.history[state.historyIndex] = state.currentChar;
+      if (state.historyIndex > 0 && state.history[state.historyIndex - 1] === state.currentChar) {
+        state.history.splice(state.historyIndex, 1);
+        state.historyIndex--;
+      }
+      updateBreadcrumbsUI();
+    }
+    if (!data.unavailable) {
+      state.findChips = new Set([state.currentChar]);
+      renderFindChips();
+    }
     state.activeStructureIndex = 0;
   } else {
     state.currentChar = data.meta?.char || data.meta?.literal || state.currentChar || effectiveToken;
@@ -285,11 +328,13 @@ async function inspectCharacter(charOrToken, recordHistory = true, altIds = "") 
   renderIdsTokens();
   renderRecursiveTree();
 
-  // 逆引き検索を連動更新
-  executeFindSearch();
+  if (!data.unavailable) {
+    // 逆引き検索を連動更新
+    executeFindSearch();
 
-  // 収録熟語・語彙検索を連動更新
-  loadWordsForCurrentKanji();
+    // 収録熟語・語彙検索を連動更新
+    loadWordsForCurrentKanji();
+  }
 }
 
 /**

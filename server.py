@@ -110,9 +110,10 @@ def resolve_query(query: str) -> tuple[str, str]:
     3. CHISE実体参照 ('&CDP-8BD9;', 'CDP-8BD9')
     4. 単一漢字 ('蛍', '𰃮', '𭕄')
     """
-    q = query.strip()
-    if not q:
-        return "", ""
+    raw_q = query.strip()
+    q = re.sub(r"[\uFE00-\uFE0F\U000E0100-\U000E01EF]", "", raw_q)
+    if not q or q in ("&", "&;"):
+        return "", raw_q
 
     # 1. ⺍ (U+2E8D) の正規化
     if q == "⺍":
@@ -126,11 +127,15 @@ def resolve_query(query: str) -> tuple[str, str]:
         if entity is not None:
             return entity, q
     except ValueError:
-        return "", q
+        return "", raw_q
 
     # 4. 複数文字入力の処理（IDC演算子で始まらない通常の複数文字文字列の場合は先頭1文字を採用）
     idc_operators = set("⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿")
     if len(q) > 1 and q[0] not in idc_operators:
+        if q.startswith("&"):
+            if re.match(r"^&[A-Za-z0-9_+.'-]+;.+", q):
+                return q, q
+            return "", raw_q
         chars = [c for c in q if not c.isspace()]
         if len(chars) > 1:
             first_char = chars[0]
@@ -444,8 +449,17 @@ def _snapshot_read(query: Callable[..., dict[str, Any]]) -> Callable[..., dict[s
         conn.execute("SAVEPOINT api_query")
         try:
             return query(conn, *args, **kwargs)
+        except Exception:
+            try:
+                conn.execute("ROLLBACK TO api_query")
+            except sqlite3.Error:
+                pass
+            raise
         finally:
-            conn.execute("RELEASE api_query")
+            try:
+                conn.execute("RELEASE api_query")
+            except sqlite3.Error:
+                pass
 
     return read
 
@@ -521,32 +535,65 @@ def _query_component_rows_db(
     split: bool = False,
 ) -> tuple[tuple[int, int, int], list[sqlite3.Row]]:
     """Rank once, sharing the full match set between counts and limited lists."""
-    primary = components[0]
-    equivs = sorted({primary, *ids_parser.EQUIV_GROUPS.get(primary, [])})
-    placeholders = ", ".join("?" for _ in equivs)
+    groups = list(dict.fromkeys(
+        tuple(sorted({comp, *ids_parser.EQUIV_GROUPS.get(comp, [])}))
+        for comp in components
+    ))
     filters, filter_params = _build_tier_and_stroke_filters(tier, min_strokes, max_strokes)
-    for component in components[1:]:
-        others = sorted({component, *ids_parser.EQUIV_GROUPS.get(component, [])})
-        ph = ", ".join("?" for _ in others)
-        filters.append(f"c.char IN (SELECT target_char FROM component_closure WHERE component IN ({ph}))")
-        filter_params.extend(others)
-    where_sql = " AND ".join(["r.match_rank = 1", *filters])
+    if len(groups) == 1:
+        group = groups[0]
+        placeholders = ", ".join("?" for _ in group)
+        ranked_sql = f"""
+            SELECT cc.target_char, cc.is_direct, cc.min_depth, cc.via_char,
+                   ROW_NUMBER() OVER (
+                PARTITION BY cc.target_char
+                ORDER BY cc.is_direct DESC, cc.min_depth ASC,
+                         COALESCE(cc.via_char, '') ASC, cc.component ASC
+            ) AS match_rank
+            FROM component_closure cc
+            WHERE cc.component IN ({placeholders})
+        """
+        where_sql = " AND ".join(["r.match_rank = 1", *filters])
+        params: list[Any] = list(group) + filter_params
+    else:
+        union_parts = []
+        group_params: list[Any] = []
+        for idx, group in enumerate(groups):
+            placeholders = ", ".join("?" for _ in group)
+            union_parts.append(
+                f"SELECT {idx} AS grp, cc.target_char, cc.is_direct, cc.min_depth, "
+                f"cc.via_char, cc.component FROM component_closure cc "
+                f"WHERE cc.component IN ({placeholders})"
+            )
+            group_params.extend(group)
+        union_sql = " UNION ALL ".join(union_parts)
+        ranked_sql = f"""
+            SELECT target_char, is_direct, min_depth, via_char,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY target_char
+                       ORDER BY is_direct ASC, min_depth DESC, COALESCE(via_char, '') ASC
+                   ) AS match_rank,
+                   COUNT(*) OVER (PARTITION BY target_char) AS group_count
+            FROM (
+                SELECT target_char, is_direct, min_depth, via_char,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY grp, target_char
+                           ORDER BY is_direct DESC, min_depth ASC,
+                                    COALESCE(via_char, '') ASC, component ASC
+                       ) AS grp_rank
+                FROM ({union_sql})
+            )
+            WHERE grp_rank = 1
+        """
+        where_sql = " AND ".join(["r.match_rank = 1", "r.group_count = ?", *filters])
+        params = group_params + [len(groups)] + filter_params
 
     # Pick one coherent source row per target. Direct matches take precedence;
     # indirect matches use the shortest path with a deterministic tie-break.
     # The nontruncating LIMIT -1 in matches prevents flattening, making the
     # multiply referenced set reusable without SQLite 3.35 MATERIALIZED syntax.
     matches_sql = f"""
-        WITH ranked AS (
-            SELECT cc.target_char, cc.is_direct, cc.min_depth, cc.via_char,
-                   ROW_NUMBER() OVER (
-                PARTITION BY cc.target_char
-                ORDER BY cc.is_direct DESC, cc.min_depth ASC,
-                         cc.target_priority ASC, cc.component ASC, COALESCE(cc.via_char, '') ASC
-            ) AS match_rank
-            FROM component_closure cc
-            WHERE cc.component IN ({placeholders})
-        ), matches AS (
+        WITH ranked AS ({ranked_sql}), matches AS (
             SELECT c.char, c.codepoint, c.tier, c.stroke_count, c.chise_ids,
                    c.ja_on, c.ja_kun, c.grade, c.freq, c.sort_priority,
                    r.is_direct, r.min_depth,
@@ -556,7 +603,6 @@ def _query_component_rows_db(
             LIMIT -1
         )
     """
-    params = equivs + filter_params
     order_sql = """
         COALESCE(freq, 999999) ASC,
         COALESCE(grade, 999) ASC, sort_priority ASC,
@@ -619,22 +665,80 @@ _ComponentIndex = tuple[dict[str, str], dict[str, dict[str, ComponentPath]]]
 _fallback_component_index: _ComponentIndex | None = None
 
 
+def _extract_component_tokens(formula: str) -> set[str]:
+    """Tokenize an IDS formula into normalized non-operator component symbols."""
+    return {
+        ids_parser.normalize_component(ids_parser.normalize_entity(token))
+        for token in ids_parser.tokenize_ids(formula, normalize=False)
+        if token not in ids_parser.IDC_INFO and token not in ('?', '？', '|')
+    }
+
+
 def _get_fallback_component_index() -> _ComponentIndex:
     """Cache a complete index per loaded IDS dictionary, never a limited result."""
     global _fallback_component_index
     source = ids_parser.get_ids_dict()
     if _fallback_component_index is None or _fallback_component_index[0] is not source:
+        all_keys = source.keys() | ids_parser.ATOMIC_SUBDECOMPOSITIONS.keys()
+        targets = [
+            char
+            for char in all_keys
+            if not (char.startswith("&") and ids_parser.normalize_entity(char) != char)
+        ]
+        chise_primary: dict[str, str] = {}
+        alternatives: dict[str, set[str]] = {}
+        if source is ids_parser._GLOBAL_IDS_DICT:
+            chise_dir = DATA_DIR / "chise-ids"
+            if chise_dir.is_dir():
+                ucs_files = sorted(chise_dir.glob("IDS-UCS-*.txt"))
+                jis_files = sorted(chise_dir.glob("IDS-JIS-*.txt"))
+                ucs_and_jis = set(ucs_files) | set(jis_files)
+                other_files = sorted(
+                    p for p in chise_dir.glob("IDS-*.txt") if p not in ucs_and_jis
+                )
+                for path in ucs_files + jis_files + other_files:
+                    with path.open(encoding="utf-8") as f:
+                        for line in f:
+                            if line.startswith(";;") or not line.strip():
+                                continue
+                            parts = line.rstrip("\n").split("\t")
+                            if len(parts) < 3:
+                                continue
+                            char_tok = ids_parser.normalize_entity(parts[1].strip())
+                            if not char_tok:
+                                continue
+                            for col in parts[2:]:
+                                col = col.strip()
+                                if col.startswith("@apparent="):
+                                    app_ids = col[len("@apparent="):].strip()
+                                    alternatives.setdefault(char_tok, set()).update(
+                                        _extract_component_tokens(app_ids)
+                                    )
+                                elif char_tok not in chise_primary and col and col != "?":
+                                    chise_primary[char_tok] = col
+            cjkvi_path = DATA_DIR / "cjkvi-ids.txt"
+            if cjkvi_path.is_file():
+                with cjkvi_path.open(encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("#") or not line.strip():
+                            continue
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) < 3:
+                            continue
+                        char_tok = ids_parser.normalize_entity(parts[1].strip())
+                        if not char_tok:
+                            continue
+                        formula = " | ".join(p.strip() for p in parts[2:] if p.strip())
+                        alternatives.setdefault(char_tok, set()).update(
+                            _extract_component_tokens(formula)
+                        )
         primary = {}
-        for char in source.keys() | ids_parser.ATOMIC_SUBDECOMPOSITIONS.keys():
-            formula = source.get(char)
+        for char in targets:
+            formula = chise_primary.get(char) if chise_primary else source.get(char)
             if not formula or formula == char:
                 formula = ids_parser.ATOMIC_SUBDECOMPOSITIONS.get(char, char)
-            primary[char] = {
-                ids_parser.normalize_component(ids_parser.normalize_entity(token))
-                for token in ids_parser.tokenize_ids(formula, normalize=False)
-                if token not in ids_parser.IDC_INFO and token not in ('?', '？', '|')
-            }
-        index = ComponentGraph(primary).reverse_index(source)
+            primary[char] = _extract_component_tokens(formula)
+        index = ComponentGraph(primary, alternatives).reverse_index(targets)
         _fallback_component_index = (source, index)
     return _fallback_component_index
 
@@ -644,17 +748,46 @@ def query_component_matches_fallback(
 ) -> dict[str, Any]:
     """Search whole IDS tokens and paths, counting before limiting the output."""
     source, index = _get_fallback_component_index()
-    matches = {}
-    for symbol in sorted({components[0], *ids_parser.EQUIV_GROUPS.get(components[0], [])}):
-        for target, path in index.get(symbol, {}).items():
-            previous = matches.get(target)
-            if previous is None or (path.min_depth, path.via_char) < (previous.min_depth, previous.via_char):
-                matches[target] = path
-    for component in components[1:]:
-        targets = set()
-        for symbol in {component, *ids_parser.EQUIV_GROUPS.get(component, [])}:
-            targets.update(index.get(symbol, {}))
-        matches = {char: path for char, path in matches.items() if char in targets}
+    groups = list(dict.fromkeys(
+        tuple(sorted({comp, *ids_parser.EQUIV_GROUPS.get(comp, [])}))
+        for comp in components
+    ))
+    per_group_matches: list[dict[str, ComponentPath]] = []
+    for group in groups:
+        group_map: dict[str, ComponentPath] = {}
+        for symbol in group:
+            for target, path in index.get(symbol, {}).items():
+                previous = group_map.get(target)
+                if previous is None or (
+                    -path.is_direct,
+                    path.min_depth,
+                    path.via_char,
+                ) < (
+                    -previous.is_direct,
+                    previous.min_depth,
+                    previous.via_char,
+                ):
+                    group_map[target] = path
+        per_group_matches.append(group_map)
+
+    if not per_group_matches:
+        common_targets: set[str] = set()
+    else:
+        common_targets = set(per_group_matches[0].keys())
+        for group_map in per_group_matches[1:]:
+            common_targets &= group_map.keys()
+
+    matches: dict[str, ComponentPath] = {}
+    for target in common_targets:
+        bottleneck = min(
+            (group_map[target] for group_map in per_group_matches),
+            key=lambda p: (p.is_direct, -p.min_depth, p.via_char),
+        )
+        matches[target] = (
+            ComponentPath(1, 1, "")
+            if bottleneck.is_direct
+            else ComponentPath(bottleneck.min_depth, 0, bottleneck.via_char)
+        )
     priorities = {'bmp': {1}, 'ext': {2, 4}, 'gaiji': {5}}.get(tier)
     blocks = {char: jp_metadata.get_unicode_block_jp(char) for char in matches}
     if priorities is not None:
@@ -669,7 +802,9 @@ def query_component_matches_fallback(
     ordered = sorted(matches, key=lambda char: (blocks[char]['sort_priority'], char))
     results = [format_result_item(
         char=char, codepoint=blocks[char]['codepoint'], tier=blocks[char]['tier'],
-        stroke_count=None, chise_ids=source[char], ja_on_list=[], ja_kun_list=[],
+        stroke_count=None,
+        chise_ids=source.get(char) or ids_parser.ATOMIC_SUBDECOMPOSITIONS.get(char, char),
+        ja_on_list=[], ja_kun_list=[],
         is_direct=matches[char].is_direct, min_depth=matches[char].min_depth,
         via_char=matches[char].via_char,
     ) for char in ordered[:limit]]
@@ -1540,15 +1675,19 @@ class KanjiExplorerHandler(BaseHTTPRequestHandler):
             meta = get_fallback_character_meta(canonical_char, requested_char)
 
         # 2. 外部レンダラーモジュールによるHTML合成
-        full_html = view_renderer.render_side_by_side_html(
-            canonical_char=canonical_char,
-            meta=meta,
-            params=params,
-            prev_char=prev_char,
-            next_char=next_char,
-            joyo_index=joyo_index,
-            joyo_total=joyo_total,
-        )
+        try:
+            full_html = view_renderer.render_side_by_side_html(
+                canonical_char=canonical_char,
+                meta=meta,
+                params=params,
+                prev_char=prev_char,
+                next_char=next_char,
+                joyo_index=joyo_index,
+                joyo_total=joyo_total,
+            )
+        except ValueError:
+            self._send_error_json("指定された文字を解決できませんでした。", status=400)
+            return
 
         content_bytes = full_html.encode("utf-8")
         self.send_response(200)

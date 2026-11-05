@@ -50,8 +50,22 @@ def contains_polygon(outer: list[tuple[float, float]], inner: list[tuple[float, 
     """Containment including touching edges, but excluding concavity crossings."""
     if not inner or not all(_contains_point(outer, point) for point in inner):
         return False
+    outer_edges = list(zip(outer, outer[1:] + outer[:1]))
     for a, b in zip(inner, inner[1:] + inner[:1]):
-        for c, d in zip(outer, outer[1:] + outer[:1]):
+        for c, d in outer_edges:
             if _cross(a, b, c) * _cross(a, b, d) < 0 and _cross(c, d, a) * _cross(c, d, b) < 0:
+                return False
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length_sq = dx * dx + dy * dy
+        if not length_sq:
+            continue
+        cuts = sorted({0.0, 1.0, *(
+            t for c in outer if abs(_cross(a, b, c)) < 1e-12
+            and 0.0 < (t := ((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / length_sq) < 1.0
+        )})
+        for t0, t1 in zip(cuts, cuts[1:]):
+            if t1 - t0 > 1e-9 and not _contains_point(
+                outer, (a[0] + 0.5 * (t0 + t1) * dx, a[1] + 0.5 * (t0 + t1) * dy)
+            ):
                 return False
     return True

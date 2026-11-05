@@ -495,5 +495,20 @@ class TestWSGIApplication:
         assert status_box[0].startswith("405")
         assert "error" in data
 
+    def test_variation_selector_and_entity_edge_cases(self):
+        assert server.resolve_query("&\uFE00")[0] == ""
+        assert server.resolve_query("&\uFE00;")[0] == ""
+        assert server.resolve_query("U+86CD\uFE00")[0] == "蛍"
+        assert server.resolve_query("&U-i002+2FF1;𢆶戍") == (
+            "&U-i002+2FF1;𢆶戍",
+            "&U-i002+2FF1;𢆶戍",
+        )
 
+        status_box = []
+        environ = self._make_environ(path="/view", query="char=%26%EF%B8%80")
+        body_chunks = server.application(
+            environ, lambda status, headers, exc_info=None: status_box.append(status)
+        )
+        assert status_box == ["400 Bad Request"]
+        assert "error" in json.loads(b"".join(body_chunks).decode("utf-8"))
 

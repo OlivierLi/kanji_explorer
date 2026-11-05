@@ -70,3 +70,39 @@ def test_ori_retains_source_group_shared_stroke():
     strokes = glyph_service.extract_kanjivg_stroke_layers("織")["layer_strokes"]
     assert set(strokes["0.1.0"]) & set(strokes["0.1.1"]) == {"kvg:07e54-s11"}
     assert set(strokes["0.1.0"]) | set(strokes["0.1.1"]) == set(strokes["0.1"])
+
+
+@pytest.mark.parametrize("token", ["U+110000", "0x110000", "&;", "&bad token;"])
+def test_get_glyph_svg_handles_invalid_notation_gracefully(token):
+    svg = glyph_service.get_glyph_svg(token)
+    assert svg.startswith("<svg")
+    assert "<text" in svg
+
+
+def test_counter_bar_split_sets_symmetric_frame_island_and_supports_raw_char():
+    tree = ids_parser.decompose_character("目", max_depth=6, compute_bbox=True)
+    tree["children"][1]["char"] = None
+    tree["children"][1]["raw_char"] = "二"
+    islands = glyph_service._extract_ink_islands(glyph_service.get_jigmo_path("目"))
+    extra_island = {
+        "id": 99,
+        "d": "M0 880H40V840H0Z",
+        "x1": 0.0,
+        "y1": 0.0,
+        "x2": 0.04,
+        "y2": 0.04,
+        "cx": 0.02,
+        "cy": 0.02,
+        "w": 0.04,
+        "h": 0.04,
+        "hole_boxes": [],
+        "polygon": [(0.0, 0.0), (0.04, 0.0), (0.04, 0.04), (0.0, 0.04)],
+        "hole_polygons": [],
+        "is_linear": True,
+    }
+    glyph_service._assign_ink_islands_to_tree(tree, [islands[0], extra_island], set())
+    assert tree["children"][0]["_islands"] == [islands[0]]
+    assert tree["children"][0]["_has_shared_island"] is True
+    assert tree["children"][1]["_islands"] == [islands[0]]
+    assert tree["children"][1]["_has_shared_island"] is True
+    assert len(tree["children"][1]["clip_rects"]) == 2
