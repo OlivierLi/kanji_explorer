@@ -8,26 +8,35 @@ and inspects both compileStrokePhysics vector state and ctx.getImageData(0, 0, 7
 pixel arrays without saving or reading PNG files.
 
 Metrics:
-  M1: Retrograde Boundary Folds (retrograde_steps, min_edge_dot_tangent, self_intersections)
-  M2: High-Frequency Boundary Sawtooth / Jitter (edge_jitter_ratio, normal_sign_flip_rate)
-  M3: Hook Trajectory & Splice Discontinuity (hook_tip_error_px, hook_angle_error_deg, hook_splice_jump_px)
-  M4: Raster Medial-Axis / Cross-Section Width Profile (max_width_step_px, tip_width_px, kvg_endpoint_unreached_px)
-  M5: Mechanical Barcode Kasure Detection (max_cross_section_gaps, regular_kasure_stripes)
-  M6: Longitudinal Spine Tone Oscillation / Polka-Dot Pooling (spine_tone_oscillation, spine_tone_std_diff)
-  M7: Topological Integrity (disconnected_components)
+  M1:  Retrograde Boundary Folds (retrograde_steps, min_edge_dot_tangent, self_intersections)
+  M2:  High-Frequency Boundary Sawtooth / Jitter (edge_jitter_ratio, normal_sign_flip_rate)
+  M3:  Hook Trajectory & Splice Discontinuity (hook_tip_error_px, hook_angle_error_deg, hook_splice_jump_px)
+  M4:  Raster Medial-Axis / Cross-Section Width Profile (max_width_step_px, tip_width_px, kvg_endpoint_unreached_px)
+  M5:  Mechanical Barcode Kasure Detection (max_cross_section_gaps, regular_kasure_stripes)
+  M6:  Longitudinal Spine Tone Oscillation / Polka-Dot Pooling (spine_tone_oscillation, spine_tone_std_diff)
+  M7:  Topological Integrity (disconnected_components)
+  M8:  Pointed Calligraphic Taper (tip_ratio, u80_ratio, u90_ratio, slope_dev)
+  M9:  Anti-Bulbous Middle Control (mid_bulge_ratio, max_body_ratio, mid_arch_excess_px)
+  M10: Short-Stroke & Dot Elongation / Anti-Roundness (length_to_width_ratio, raster_aspect_ratio, dot_end_bloat_ratio)
+  M11: Width Consistency Across Crossing & Character Strokes (crossing_width_ratio, crossing_mean_ratio, char_width_ratio)
+  M12: Terminal Tome Clubbing & Acute Corner Webbing (tome_ratio, corner_bloat_ratio)
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
@@ -36,8 +45,14 @@ if str(BASE_DIR) not in sys.path:
 import ids_parser
 import glyph_service
 
-DEFAULT_BENCHMARK_CHARS = ["永", "水", "嵐", "成", "九", "子", "心", "道", "鬱", "涙"]
+DEFAULT_BENCHMARK_CHARS = [
+    "永", "水", "嵐", "成", "九", "子", "心", "道", "鬱", "涙",
+    "京", "高", "葱", "匆", "交", "父", "文", "立", "家", "守",
+    "広", "殺", "凶", "気", "井", "開", "月", "用", "周", "糸",
+    "弱", "幾", "鳥", "米", "門", "同",
+]
 APP_JS_PATH = BASE_DIR / "static" / "app.js"
+DB_PATH = BASE_DIR / "data" / "kanji_explorer.db"
 
 # Thresholds for categorizing defects
 THRESHOLDS = {
@@ -61,7 +76,159 @@ THRESHOLDS = {
     "m9_max_mid_bulge_ratio": 1.05,
     "m9_max_body_ratio": 1.14,
     "m9_max_mid_arch_excess_px": 1.0,
+    "m10_min_length_to_width_ratio": 2.35,
+    "m10_min_raster_aspect_ratio": 1.95,
+    "m10_max_dot_end_bloat_ratio": 0.68,
+    "m11_max_crossing_width_ratio": 1.32,
+    "m11_max_crossing_mean_ratio": 1.30,
+    "m11_max_char_width_ratio": 1.30,
+    "m11_min_char_width_ratio": 0.72,
+    "m12_max_tome_ratio": 1.30,
+    "m12_max_corner_bloat_ratio": 1.28,
 }
+
+
+def _collect_path_components(xml_input: ET.Element | str) -> list[dict[str, Any]]:
+    """Fast extraction of stroke dictionaries from KanjiVG XML."""
+    if isinstance(xml_input, str):
+        if "xmlns:kvg=" not in xml_input:
+            if "<kanji " in xml_input:
+                xml_text = xml_input.replace("<kanji ", f'<kanji xmlns:kvg="{glyph_service.KVG_NS}" ', 1)
+            else:
+                xml_text = f'<kanjivg xmlns:kvg="{glyph_service.KVG_NS}">{xml_input}</kanjivg>'
+        else:
+            xml_text = xml_input
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return []
+    else:
+        root = xml_input
+
+    path_comp_map: dict[int, str] = {}
+
+    def _traverse(el: ET.Element, ancestor_elems: tuple[str, ...] = ()) -> None:
+        cur_elems = ancestor_elems
+        if el.tag.endswith("g"):
+            raw_elem = (
+                el.attrib.get(f"{{{glyph_service.KVG_NS}}}element")
+                or el.attrib.get("kvg:element")
+                or ""
+            )
+            norm_elem, _ = glyph_service.normalize_element_symbol(raw_elem)
+            elem_val = norm_elem or raw_elem
+            if elem_val:
+                cur_elems = (*ancestor_elems, elem_val)
+        elif el.tag.endswith("path"):
+            comp_val = ""
+            for anc in reversed(cur_elems):
+                if anc in ("子", "了", "孑"):
+                    comp_val = anc
+                    break
+            if not comp_val and cur_elems:
+                comp_val = cur_elems[-1]
+            path_comp_map[id(el)] = comp_val
+        for ch_el in el:
+            _traverse(ch_el, cur_elems)
+
+    _traverse(root)
+
+    raw_paths = [
+        p for p in root.iter()
+        if p.tag.endswith("path") and p.attrib.get("d")
+    ]
+    strokes = []
+    for i, p in enumerate(raw_paths, 1):
+        sid = p.attrib.get("id", f"s-{i}")
+        sd = p.attrib.get("d", "")
+        ptype = (
+            p.attrib.get(f"{{{glyph_service.KVG_NS}}}type")
+            or p.attrib.get("kvg:type")
+            or ""
+        )
+        comp = path_comp_map.get(id(p), "")
+        strokes.append({
+            "id": sid,
+            "d": sd,
+            "type": ptype,
+            "element": comp,
+            "component": comp,
+        })
+    return strokes
+
+
+if not hasattr(glyph_service, "_collect_path_components"):
+    glyph_service._collect_path_components = _collect_path_components
+
+
+def load_characters_from_db(
+    joyo: bool = False,
+    grades_str: str = "",
+    db_path: Path = DB_PATH,
+) -> list[str]:
+    """Loads characters from SQLite database based on joyo or grade criteria."""
+    if not db_path.exists():
+        print(f"[WARN] Database not found at {db_path}. Falling back to default benchmark.", file=sys.stderr)
+        return list(DEFAULT_BENCHMARK_CHARS)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        if joyo:
+            cur.execute(
+                "SELECT char FROM characters WHERE grade IN (1, 2, 3, 4, 5, 6, 8) "
+                "ORDER BY grade, stroke_count, char"
+            )
+        elif grades_str:
+            grades = [int(g.strip()) for g in grades_str.split(",") if g.strip().isdigit()]
+            if not grades:
+                return []
+            placeholders = ",".join("?" for _ in grades)
+            cur.execute(
+                f"SELECT char FROM characters WHERE grade IN ({placeholders}) "
+                f"ORDER BY grade, stroke_count, char",
+                grades,
+            )
+        else:
+            return []
+        rows = cur.fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def extract_strokes_for_characters(chars: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Fast extraction of KanjiVG strokes for benchmark characters."""
+    kvg_service = glyph_service._get_default_kanjivg_service()
+    char_map: dict[str, list[dict[str, Any]]] = {}
+
+    for ch in chars:
+        try:
+            xml_root = kvg_service.get_kanji_xml(ch) if kvg_service else None
+            if xml_root is not None:
+                raw_strokes = glyph_service._collect_path_components(xml_root)
+                if raw_strokes:
+                    char_map[ch] = [
+                        {
+                            "id": s.get("id", f"s-{idx+1}"),
+                            "d": s.get("d", ""),
+                            "type": s.get("type", ""),
+                            "component": s.get("element", s.get("component", "")),
+                        }
+                        for idx, s in enumerate(raw_strokes)
+                    ]
+                else:
+                    tree = ids_parser.decompose_character(ch, max_depth=6, compute_bbox=True)
+                    layer_info = glyph_service.extract_kanjivg_stroke_layers(ch, tree)
+                    char_map[ch] = layer_info.get("all_strokes", [])
+            else:
+                tree = ids_parser.decompose_character(ch, max_depth=6, compute_bbox=True)
+                layer_info = glyph_service.extract_kanjivg_stroke_layers(ch, tree)
+                char_map[ch] = layer_info.get("all_strokes", [])
+        except Exception as e:
+            print(f"[WARN] Failed to extract strokes for '{ch}': {e}", file=sys.stderr)
+            char_map[ch] = []
+    return char_map
 
 
 def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_js_content: str) -> str:
@@ -104,11 +271,16 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
   }
 
   // Exact 1x1 8-connected component labeling on stroke bounding box
-  function countConnectedComponents(imgData, W, H) {
-    let minX = W, maxX = -1, minY = H, maxY = -1;
+  function countConnectedComponents(imgData, W, H, bbox) {
     const data = imgData.data;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
+    const bMinX = bbox ? Math.max(0, Math.floor(bbox.minX)) : 0;
+    const bMaxX = bbox ? Math.min(W - 1, Math.ceil(bbox.maxX)) : W - 1;
+    const bMinY = bbox ? Math.max(0, Math.floor(bbox.minY)) : 0;
+    const bMaxY = bbox ? Math.min(H - 1, Math.ceil(bbox.maxY)) : H - 1;
+
+    let minX = W, maxX = -1, minY = H, maxY = -1;
+    for (let y = bMinY; y <= bMaxY; y++) {
+      for (let x = bMinX; x <= bMaxX; x++) {
         const a = data[(y * W + x) * 4 + 3];
         if (a >= 32) {
           if (x < minX) minX = x;
@@ -181,10 +353,18 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
     return componentCount;
   }
 
-  // Master execution for each character
-  for (const [char, strokes] of Object.entries(charStrokeMap)) {
+  // Pre-allocate one reusable 792x792 canvas for isolated stroke rendering
+  const strokeCanvas = document.createElement("canvas");
+  strokeCanvas.width = 792;
+  strokeCanvas.height = 792;
+  const strokeCtx = strokeCanvas.getContext("2d");
+
+  try {
+    // Master execution for each character
+    for (const [char, strokes] of Object.entries(charStrokeMap)) {
     const totalStrokes = strokes.length;
     const strokeEvals = [];
+    const compiledStrokesInfo = [];
 
     // Container for full character verification via setupCalligraphySumiCanvas
     const targetElement = document.createElement("div");
@@ -232,6 +412,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       if (!compiled || !compiled.samples || compiled.samples.length < 2) {
         continue;
       }
+      const beh = compiled.behavior || {};
 
       const pts = compiled.samples;
       const numPts = pts.length;
@@ -246,15 +427,35 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       // Filter out any synthetic/auxiliary corner features; only genuine corner peaks count
       const genuineCorners = (compiled.cornerFeatures || []).filter(cf => !cf.isAuxiliary && cf.angle > 0.35);
 
-      // Render isolated stroke onto 792x792 canvas
-      const strokeCanvas = document.createElement("canvas");
-      strokeCanvas.width = 792;
-      strokeCanvas.height = 792;
-      const strokeCtx = strokeCanvas.getContext("2d");
-
+      // Render isolated stroke onto reusable 792x792 canvas
+      strokeCtx.clearRect(0, 0, 792, 792);
       renderFullCompiledStroke(strokeCtx, compiled, { toneMode: "sumi", opacity: 1.0 });
       const imgData = strokeCtx.getImageData(0, 0, 792, 792);
       const imgRaw = imgData.data;
+
+      // Compute bounding box around stroke sample points and outlines padded by 36px
+      let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
+      for (let i = 0; i < numPts; i++) {
+        const p = pts[i];
+        if (p.x < bMinX) bMinX = p.x;
+        if (p.x > bMaxX) bMaxX = p.x;
+        if (p.y < bMinY) bMinY = p.y;
+        if (p.y > bMaxY) bMaxY = p.y;
+        if (p.lx < bMinX) bMinX = p.lx;
+        if (p.lx > bMaxX) bMaxX = p.lx;
+        if (p.ly < bMinY) bMinY = p.ly;
+        if (p.ly > bMaxY) bMaxY = p.ly;
+        if (p.rx < bMinX) bMinX = p.rx;
+        if (p.rx > bMaxX) bMaxX = p.rx;
+        if (p.ry < bMinY) bMinY = p.ry;
+        if (p.ry > bMaxY) bMaxY = p.ry;
+      }
+      const strokeBbox = {
+        minX: Math.max(0, Math.floor(bMinX - 36)),
+        maxX: Math.min(791, Math.ceil(bMaxX + 36)),
+        minY: Math.max(0, Math.floor(bMinY - 36)),
+        maxY: Math.min(791, Math.ceil(bMaxY + 36))
+      };
 
       // -----------------------------------------------------------------------
       // Metric 1: Retrograde Boundary Folds
@@ -305,8 +506,6 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 
       // -----------------------------------------------------------------------
       // Metric 2: High-Frequency Boundary Sawtooth / Jitter
-      // Measures normal-offset second difference (in px) and sign-flip rate
-      // across both left and right edges, independent of centerline straightness.
       // -----------------------------------------------------------------------
       const features = compiled.features || [];
       const eligibleIndices = [];
@@ -378,10 +577,9 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 
       // -----------------------------------------------------------------------
       // Metric 4: Raster Medial-Axis / Cross-Section Width Profile
-      // Measures single-arm outer cross-sectional span along local normal from
-      // centerline s=0 (bridging interior kasure slits <= 3.5px without jumping
-      // across exterior air gaps into a folded arm).
       // -----------------------------------------------------------------------
+      const hasKasure = !!(beh.isSweepEnd && !beh.isZiHengPie && !beh.isRoofHook && !beh.isRisingTi && !beh.isVerticalTi && (compiled.origLen || 0) > 45 && !beh.isRightNa && !compiled.hookFeature && (compiled.cornerFeatures ? compiled.cornerFeatures.length : 0) <= 1);
+
       const rasterW = new Float32Array(numPts);
       const maxSearch = Math.max(24, Math.ceil(compiled.shaftRadius * 2.2));
 
@@ -391,6 +589,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         const cy = p.y;
         const nx = p.nx;
         const ny = p.ny;
+        const maxGap = (hasKasure && p.u >= 0.74) ? 3.5 : 0.5;
 
         let lastPos = -Infinity;
         let gapPos = 0;
@@ -398,13 +597,29 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
           const qx = Math.round(cx + nx * s);
           const qy = Math.round(cy + ny * s);
           if (qx < 0 || qx >= 792 || qy < 0 || qy >= 792) break;
+
+          if (Math.abs(s) > 4.0) {
+            let inOtherLeg = false;
+            const distSqI = s * s;
+            for (let m = 0; m < numPts; m += 3) {
+              if (Math.abs(m - i) <= 14) continue;
+              const dmx = qx - pts[m].x;
+              const dmy = qy - pts[m].y;
+              if (dmx * dmx + dmy * dmy < distSqI * 0.72) {
+                inOtherLeg = true;
+                break;
+              }
+            }
+            if (inOtherLeg) break;
+          }
+
           const a = imgRaw[(qy * 792 + qx) * 4 + 3];
           if (a >= 32) {
             lastPos = s;
             gapPos = 0;
           } else {
             gapPos += 0.5;
-            if (gapPos > 3.5) break;
+            if (gapPos > maxGap) break;
           }
         }
 
@@ -414,13 +629,29 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
           const qx = Math.round(cx + nx * s);
           const qy = Math.round(cy + ny * s);
           if (qx < 0 || qx >= 792 || qy < 0 || qy >= 792) break;
+
+          if (Math.abs(s) > 4.0) {
+            let inOtherLeg = false;
+            const distSqI = s * s;
+            for (let m = 0; m < numPts; m += 3) {
+              if (Math.abs(m - i) <= 14) continue;
+              const dmx = qx - pts[m].x;
+              const dmy = qy - pts[m].y;
+              if (dmx * dmx + dmy * dmy < distSqI * 0.72) {
+                inOtherLeg = true;
+                break;
+              }
+            }
+            if (inOtherLeg) break;
+          }
+
           const a = imgRaw[(qy * 792 + qx) * 4 + 3];
           if (a >= 32) {
             lastNeg = s;
             gapNeg = 0;
           } else {
             gapNeg += 0.5;
-            if (gapNeg > 3.5) break;
+            if (gapNeg > maxGap) break;
           }
         }
 
@@ -436,7 +667,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       }
 
       let maxWidthStepPx = 0;
-      for (let i = 1; i < stopIdx; i++) {
+      for (let i = 3; i < stopIdx - 2; i++) {
         let nearCorner = false;
         for (const cf of genuineCorners) {
           if (Math.abs(pts[i].s - cf.s) <= 6.0 || Math.abs(pts[i+1].s - cf.s) <= 6.0) {
@@ -448,6 +679,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
           nearCorner = true;
         }
         if (nearCorner) continue;
+
         const stepDiff = Math.abs(rasterW[i+1] - rasterW[i]);
         if (stepDiff > maxWidthStepPx) maxWidthStepPx = stepDiff;
       }
@@ -480,9 +712,6 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 
       // -----------------------------------------------------------------------
       // Metric 3: Hook Trajectory & Splice Discontinuity (Measured from Canvas Pixels)
-      // Finds the actual rendered distal hook tip pixel in imgRaw (alpha >= 32)
-      // in the hook flick hemisphere from heel H, and compares its position and
-      // angle against the actual KanjiVG terminal vector (endPt - H).
       // -----------------------------------------------------------------------
       let hookTipErrorPx = 0;
       let hookAngleErrorDeg = 0;
@@ -496,14 +725,12 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         const uKvgX = vKvgX / magKvg;
         const uKvgY = vKvgY / magKvg;
 
-        // Pre-hook shaft incoming direction
         const preIdx = Math.max(0, heelIdx - 8);
         const shaftDx = H.x - pts[preIdx].x;
         const shaftDy = H.y - pts[preIdx].y;
         const shaftMag = Math.hypot(shaftDx, shaftDy) || 1e-6;
         const uShaftX = shaftDx / shaftMag;
         const uShaftY = shaftDy / shaftMag;
-        // Lateral normal pointing toward the flick side
         const sideSign = (uShaftX * uKvgY - uShaftY * uKvgX) >= 0 ? 1 : -1;
         const latX = -uShaftY * sideSign;
         const latY = uShaftX * sideSign;
@@ -520,7 +747,6 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         for (let py = hy0; py <= hy1; py++) {
           for (let px = hx0; px <= hx1; px++) {
             if (imgRaw[(py * 792 + px) * 4 + 3] < 32) continue;
-            // Exclude pixels belonging to the incoming shaft (up to hf.index - 8)
             let insideIncomingShaft = false;
             const shaftCheckLimit = Math.max(0, hf.index - 8);
             for (let m = 0; m <= shaftCheckLimit; m += 2) {
@@ -570,50 +796,61 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 
       // -----------------------------------------------------------------------
       // Metric 5: Mechanical Barcode Kasure Detection
-      // Restricted to non-hook shaft/tail (i <= stopIdx) within local stroke width.
       // -----------------------------------------------------------------------
       let maxCrossSectionGaps = 0;
       let kasureSlitSamples = 0;
 
-      for (let i = 0; i <= stopIdx; i++) {
-        const p = pts[i];
-        if (p.u <= 0.65) continue;
+      if (!beh.isDot && !beh.isCrownDot) {
+        for (let i = 0; i < stopIdx - 2; i++) {
+          const p = pts[i];
+          if (p.u <= 0.65) continue;
 
-        const localHalfW = Math.max(4.0, 0.65 * Math.hypot(p.rx - p.lx, p.ry - p.ly));
-        let insideFirstInk = false;
-        let inGap = false;
-        let gapsInCrossSection = 0;
-
-        for (let s = -localHalfW; s <= localHalfW; s += 0.5) {
-          const qx = Math.round(p.x + p.nx * s);
-          const qy = Math.round(p.y + p.ny * s);
-          if (qx < 0 || qx >= 792 || qy < 0 || qy >= 792) continue;
-          const a = imgRaw[(qy * 792 + qx) * 4 + 3];
-
-          if (a >= 48) {
-            if (inGap) {
-              gapsInCrossSection++;
-              inGap = false;
+          let nearFeature = false;
+          for (const cf of genuineCorners) {
+            if (Math.abs(p.s - cf.s) <= 6.0) {
+              nearFeature = true;
+              break;
             }
-            insideFirstInk = true;
-          } else if (a <= 16 && insideFirstInk) {
-            inGap = true;
           }
-        }
+          if (hf && Math.abs(p.s - hf.s) <= 6.0) {
+            nearFeature = true;
+          }
+          if (nearFeature) continue;
 
-        if (gapsInCrossSection > maxCrossSectionGaps) {
-          maxCrossSectionGaps = gapsInCrossSection;
-        }
-        if (gapsInCrossSection >= 3) {
-          kasureSlitSamples++;
+          const localHalfW = Math.max(4.0, 0.65 * Math.hypot(p.rx - p.lx, p.ry - p.ly));
+          let insideFirstInk = false;
+          let inGap = false;
+          let gapsInCrossSection = 0;
+
+          for (let s = -localHalfW; s <= localHalfW; s += 0.5) {
+            const qx = Math.round(p.x + p.nx * s);
+            const qy = Math.round(p.y + p.ny * s);
+            if (qx < 0 || qx >= 792 || qy < 0 || qy >= 792) continue;
+            const a = imgRaw[(qy * 792 + qx) * 4 + 3];
+
+            if (a >= 48) {
+              if (inGap) {
+                gapsInCrossSection++;
+                inGap = false;
+              }
+              insideFirstInk = true;
+            } else if (a <= 16 && insideFirstInk) {
+              inGap = true;
+            }
+          }
+
+          if (gapsInCrossSection > maxCrossSectionGaps) {
+            maxCrossSectionGaps = gapsInCrossSection;
+          }
+          if (gapsInCrossSection >= 3) {
+            kasureSlitSamples++;
+          }
         }
       }
       const regularKasureStripes = (maxCrossSectionGaps >= 3);
 
       // -----------------------------------------------------------------------
       // Metric 6: Longitudinal Spine Tone Oscillation / Polka-Dot Pooling
-      // Uses a 5x5 local spatial average + 5-sample longitudinal box filter to
-      // isolate macroscopic radial wash stamping (stepWash) from 1px paper grain.
       // -----------------------------------------------------------------------
       const rawDarkness = [];
       for (let i = 0; i <= stopIdx; i++) {
@@ -675,20 +912,11 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       // -----------------------------------------------------------------------
       // Metric 7: Topological Integrity
       // -----------------------------------------------------------------------
-      const disconnectedComponents = countConnectedComponents(imgData, 792, 792);
+      const disconnectedComponents = countConnectedComponents(imgData, 792, 792, strokeBbox);
 
       // -----------------------------------------------------------------------
       // Metric 8: Pointed Calligraphic Taper Without Wispy Needle OR Blunt Club
-      // (wispy_ends.png vs acceptable_taper.png)
-      // - Must end in a true calligraphic point (m8_tip_ratio <= 0.16 at u=1.0,
-      //   except connecting isZiHengPie).
-      // - Must not collapse early into a 0.3mm pencil needle (u=0.80 >= 0.35,
-      //   u=0.90 >= 0.20 of shaftW on sweeps/ti).
-      // - Must maintain a steady linear/gently-convex slope attack over the
-      //   taper zone (|m8_slope_dev| <= 0.08, preventing both concave needle
-      //   plunge and parabolic sausage bulge).
       // -----------------------------------------------------------------------
-      const beh = compiled.behavior || {};
       const contourW = new Float32Array(numPts);
       for (let i = 0; i < numPts; i++) {
         contourW[i] = Math.hypot(pts[i].rx - pts[i].lx, pts[i].ry - pts[i].ly);
@@ -698,6 +926,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       const isTapered = !!(
         (beh.isSweepEnd && !beh.isZiHengPie) || beh.isRightNa || beh.isRisingTi || beh.isVerticalTi || beh.isRoofHook || hf
       );
+
       let m8TipRatio = 0.0;
       let m8U80Ratio = 1.0;
       let m8U90Ratio = 1.0;
@@ -721,31 +950,31 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
           taperStartU = hf.u;
         } else if (beh.isRightNa) {
           taperStartU = 0.72;
-        } else if (beh.isRoofHook || beh.isVerticalTi || (lastCf && lastCf.u > 0.42)) {
-          taperStartU = Math.min(0.90, (lastCf ? lastCf.u : 0.72) + 0.03);
+        } else if (beh.isRoofHook || beh.isVerticalTi || (lastCf && lastCf.u > 0.44)) {
+          taperStartU = lastCf ? lastCf.u : 0.75;
         } else if (beh.isRisingTi) {
-          taperStartU = Math.min(0.32, 4.5 / Math.max(10.0, compiled.origLen || 25.0));
+          taperStartU = Math.min(0.30, 4.8 / Math.max(10.0, compiled.origLen || 25.0));
         } else {
-          taperStartU = (pts[0].tx < -0.42) ? 0.30 : 0.34;
+          taperStartU = compiled.sweepStartU || 0.40;
         }
 
         const startIdx = Math.min(numPts - 3, Math.max(1, Math.floor((numPts - 1) * taperStartU)));
         const startW = Math.max(1.0, contourW[startIdx]);
         const endIdx = numPts - 1;
         const midIdx = Math.floor((startIdx + endIdx) * 0.5);
-        if (endIdx - startIdx >= 4) {
+        if (endIdx - startIdx >= 8) {
           const chordMidW = 0.5 * (contourW[startIdx] + contourW[endIdx]);
           m8SlopeDev = (contourW[midIdx] - chordMidW) / startW;
+        } else {
+          m8SlopeDev = 0.0;
         }
 
-        // For long/free-air sweeps & rising ti (where taper starts before u=0.50), check u=0.80 and u=0.90 ratios
         if (taperStartU <= 0.48) {
           const idx80 = Math.min(numPts - 1, Math.floor((numPts - 1) * 0.80));
           const idx90 = Math.min(numPts - 1, Math.floor((numPts - 1) * 0.90));
           m8U80Ratio = contourW[idx80] / Math.max(1.0, shaftW);
           m8U90Ratio = contourW[idx90] / Math.max(1.0, shaftW);
         } else {
-          // For post-corner / post-foot / hook tapers, check at 55% and 78% of the taper zone
           const idx55 = Math.min(numPts - 1, Math.floor(startIdx + (endIdx - startIdx) * 0.55));
           const idx78 = Math.min(numPts - 1, Math.floor(startIdx + (endIdx - startIdx) * 0.78));
           m8U80Ratio = contourW[idx55] / startW;
@@ -754,45 +983,39 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
       }
 
       // -----------------------------------------------------------------------
-      // Metric 9: Anti-Bulbous Middle Control (bulbous_middle.png on 涙)
-      // - Ensures non-dot strokes do not balloon in the middle (u in [0.28, 0.65]
-      //   away from corners must have contourW / shaftDiam <= 1.05).
-      // - Ensures post-entry body (u in [0.22, 0.85] away from corners/hooks)
-      //   does not balloon past 1.14 * shaftDiam (catching pregnant 1.28x Na).
-      // - Ensures mid-stroke width profile [u=0.18 .. u=0.68] does not arch
-      //   outward convexly (m9_mid_arch_excess_px <= 1.0px).
+      // Metric 9: Anti-Bulbous Middle Control
       // -----------------------------------------------------------------------
       let m9MidBulgeRatio = 0.0;
       let m9MaxBodyRatio = 0.0;
       let m9MidArchExcessPx = 0.0;
 
-      if (!beh.isDot) {
-        let maxMidW = 0.0;
-        let maxBodyW = 0.0;
-        for (let i = 0; i < numPts; i++) {
-          const p = pts[i];
-          if (p.u < 0.22 || p.u > 0.85) continue;
-          let nearFeature = false;
-          for (const cf of genuineCorners) {
-            if (Math.abs(p.s - cf.s) <= 5.5) {
-              nearFeature = true;
-              break;
-            }
-          }
-          if (hf && Math.abs(p.s - hf.s) <= 7.5) {
+      let maxMidW = 0.0;
+      let maxBodyW = 0.0;
+      for (let i = 0; i < numPts; i++) {
+        const p = pts[i];
+        if (p.u < 0.22 || p.u > 0.85) continue;
+        let nearFeature = false;
+        for (const cf of genuineCorners) {
+          if (Math.abs(p.s - cf.s) <= 5.5) {
             nearFeature = true;
-          }
-          if (nearFeature) continue;
-
-          if (contourW[i] > maxBodyW) maxBodyW = contourW[i];
-          if (p.u >= 0.28 && p.u <= 0.65 && contourW[i] > maxMidW) {
-            maxMidW = contourW[i];
+            break;
           }
         }
-        m9MidBulgeRatio = maxMidW / Math.max(1.0, shaftDiam);
-        m9MaxBodyRatio = maxBodyW / Math.max(1.0, shaftDiam);
+        if (hf && Math.abs(p.s - hf.s) <= 7.5) {
+          nearFeature = true;
+        }
+        if (nearFeature) continue;
 
-        // Check mid-stroke outward convexity when no corner lies in [0.15, 0.72]
+        if (contourW[i] > maxBodyW) maxBodyW = contourW[i];
+        if (p.u >= 0.28 && p.u <= 0.65 && contourW[i] > maxMidW) {
+          maxMidW = contourW[i];
+        }
+      }
+      m9MidBulgeRatio = maxMidW / Math.max(1.0, shaftDiam);
+      m9MaxBodyRatio = maxBodyW / Math.max(1.0, shaftDiam);
+
+      // Check mid-stroke outward convexity for non-dot strokes
+      if (!beh.isDot && !beh.isCrownDot) {
         const hasMidCorner = genuineCorners.some(cf => cf.u >= 0.15 && cf.u <= 0.72) || (hf && hf.u <= 0.72);
         if (!hasMidCorner) {
           const idx18 = Math.floor((numPts - 1) * 0.18);
@@ -803,10 +1026,148 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
             m9MidArchExcessPx = Math.max(0.0, contourW[idx43] - chordMid);
           }
         }
+      } else {
+        m9MidArchExcessPx = 0.0;
+      }
+
+      // -----------------------------------------------------------------------
+      // Metric 10: Short-Stroke & Dot Elongation / Anti-Roundness
+      // -----------------------------------------------------------------------
+      const strokeLenPx = (compiled.totalLen || compiled.origLen || 1.0) * (792.0 / 109.0);
+      let maxContourW = 1.0;
+      for (let i = 0; i < numPts; i++) {
+        if (contourW[i] > maxContourW) maxContourW = contourW[i];
+      }
+      const m10LengthToWidthRatio = strokeLenPx / maxContourW;
+
+      let m10RasterAspectRatio = 3.0;
+      const isFoldedOrHooked = !!(beh.isFold || genuineCorners.length > 0 || hf);
+      if (isFoldedOrHooked) {
+        m10RasterAspectRatio = m10LengthToWidthRatio;
+      } else {
+        let sumW = 0, sumX = 0, sumY = 0;
+        for (let y = strokeBbox.minY; y <= strokeBbox.maxY; y++) {
+          for (let x = strokeBbox.minX; x <= strokeBbox.maxX; x++) {
+            const a = imgRaw[(y * 792 + x) * 4 + 3];
+            if (a >= 32) {
+              sumW += 1;
+              sumX += x;
+              sumY += y;
+            }
+          }
+        }
+        if (sumW >= 10) {
+          const meanX = sumX / sumW;
+          const meanY = sumY / sumW;
+          let mu20 = 0, mu02 = 0, mu11 = 0;
+          for (let y = strokeBbox.minY; y <= strokeBbox.maxY; y++) {
+            const dy = y - meanY;
+            for (let x = strokeBbox.minX; x <= strokeBbox.maxX; x++) {
+              if (imgRaw[(y * 792 + x) * 4 + 3] >= 32) {
+                const dx = x - meanX;
+                mu20 += dx * dx;
+                mu02 += dy * dy;
+                mu11 += dx * dy;
+              }
+            }
+          }
+          mu20 /= sumW; mu02 /= sumW; mu11 /= sumW;
+          const diff = mu20 - mu02;
+          const disc = Math.sqrt(diff * diff + 4 * mu11 * mu11);
+          const lambda1 = Math.max(0.1, 0.5 * (mu20 + mu02 + disc));
+          const lambda2 = Math.max(0.1, 0.5 * (mu20 + mu02 - disc));
+          const chordPx = Math.max(1.0, Math.hypot(pts[numPts - 1].x - pts[0].x, pts[numPts - 1].y - pts[0].y));
+          const arcToChord = Math.max(1.0, strokeLenPx / chordPx);
+          m10RasterAspectRatio = Math.sqrt(lambda1 / lambda2) * arcToChord;
+        } else {
+          m10RasterAspectRatio = m10LengthToWidthRatio;
+        }
+      }
+
+      let m10DotEndBloatRatio = 0.0;
+      if (beh.isDot || beh.isCrownDot) {
+        m10DotEndBloatRatio = contourW[numPts - 1] / maxContourW;
+      }
+
+      // Characteristic body width for Metric 11
+      let sumContourW = 0, cntContourW = 0;
+      const uMinBody = beh.isRisingTi ? 0.08 : 0.12;
+      const uMaxBody = beh.isRisingTi ? 0.35 : (isTapered ? 0.55 : (beh.isDot ? 0.62 : 0.82));
+      for (let i = 0; i < numPts; i++) {
+        const p = pts[i];
+        if (p.u >= uMinBody && p.u <= uMaxBody) {
+          let nearFeat = false;
+          for (const cf of genuineCorners) {
+            if (Math.abs(p.s - cf.s) <= 5.5) {
+              nearFeat = true;
+              break;
+            }
+          }
+          if (hf && Math.abs(p.s - hf.s) <= 5.5) {
+            nearFeat = true;
+          }
+          if (!nearFeat) {
+            sumContourW += contourW[i];
+            cntContourW++;
+          }
+        }
+      }
+      const meanW = cntContourW > 0 ? (sumContourW / cntContourW) : shaftDiam;
+
+      // -----------------------------------------------------------------------
+      // Metric 12: Terminal Tome Clubbing & Acute Corner Webbing
+      // -----------------------------------------------------------------------
+      let m12TomeRatio = 1.0;
+      if (!isTapered && !beh.isDot && !beh.isCrownDot) {
+        let sumMid = 0, cntMid = 0;
+        let maxEndW = 0.0;
+        for (let i = 0; i < numPts; i++) {
+          const p = pts[i];
+          let nearCorner = false;
+          for (const cf of genuineCorners) {
+            if (Math.abs(p.s - cf.s) <= 5.5) {
+              nearCorner = true;
+              break;
+            }
+          }
+          if (nearCorner) continue;
+
+          if (p.u >= 0.30 && p.u <= 0.55) {
+            sumMid += contourW[i];
+            cntMid++;
+          }
+          if (p.u >= 0.75) {
+            if (hf && Math.abs(p.s - hf.s) <= 7.5) continue;
+            if (contourW[i] > maxEndW) {
+              maxEndW = contourW[i];
+            }
+          }
+        }
+        const midShaftW = cntMid > 0 ? (sumMid / cntMid) : shaftDiam;
+        m12TomeRatio = (midShaftW > 1.0 && maxEndW > 0) ? (maxEndW / midShaftW) : 1.0;
+      }
+
+      let m12CornerBloatRatio = 0.0;
+      if (genuineCorners.length > 0) {
+        let maxCornerW = 0.0;
+        for (let i = 0; i < numPts; i++) {
+          const p = pts[i];
+          let atCorner = false;
+          for (const cf of genuineCorners) {
+            if (Math.abs(p.s - cf.s) <= 5.5) {
+              atCorner = true;
+              break;
+            }
+          }
+          if (atCorner && contourW[i] > maxCornerW) {
+            maxCornerW = contourW[i];
+          }
+        }
+        m12CornerBloatRatio = maxCornerW / Math.max(1.0, shaftDiam);
       }
 
       // Package stroke evaluation
-      strokeEvals.push({
+      const strokeEvalObj = {
         strokeIndex: sIdx + 1,
         id: stroke.id || `s-${sIdx + 1}`,
         type: stroke.type || "",
@@ -815,6 +1176,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         hasHook: !!hf,
         isTapered,
         isDot: !!beh.isDot,
+        isCrownDot: !!beh.isCrownDot,
         m1_retrograde_steps: retrogradeSteps,
         m1_min_edge_dot_tangent: Number(minEdgeDotTangent.toFixed(3)),
         m1_min_edge_unit_dot_tangent: Number(minEdgeUnitDotTangent.toFixed(3)),
@@ -838,9 +1200,91 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         m8_slope_dev: Number(m8SlopeDev.toFixed(2)),
         m9_mid_bulge_ratio: Number(m9MidBulgeRatio.toFixed(2)),
         m9_max_body_ratio: Number(m9MaxBodyRatio.toFixed(2)),
-        m9_mid_arch_excess_px: Number(m9MidArchExcessPx.toFixed(2))
+        m9_mid_arch_excess_px: Number(m9MidArchExcessPx.toFixed(2)),
+        m10_length_to_width_ratio: Number(m10LengthToWidthRatio.toFixed(2)),
+        m10_raster_aspect_ratio: Number(m10RasterAspectRatio.toFixed(2)),
+        m10_dot_end_bloat_ratio: Number(m10DotEndBloatRatio.toFixed(2)),
+        m11_crossing_width_ratio: 1.0,
+        m11_crossing_mean_ratio: 1.0,
+        m11_char_width_ratio: 1.0,
+        m12_tome_ratio: Number(m12TomeRatio.toFixed(2)),
+        m12_corner_bloat_ratio: Number(m12CornerBloatRatio.toFixed(2)),
+      };
+
+      strokeEvals.push(strokeEvalObj);
+      compiledStrokesInfo.push({
+        sIdx,
+        pts,
+        contourW,
+        origLen: compiled.origLen || 0,
+        meanW,
+        isRisingTi: !!beh.isRisingTi,
+        isDot: !!beh.isDot,
+        isTapered,
+        evalObj: strokeEvalObj
       });
     }
+
+    // -------------------------------------------------------------------------
+    // Metric 11: Conceptual Width Consistency Across Crossing & Character Strokes
+    // -------------------------------------------------------------------------
+    for (let a = 0; a < compiledStrokesInfo.length; a++) {
+      const sA = compiledStrokesInfo[a];
+      const maxFlatU_A = sA.isRisingTi ? 0.32 : (sA.isTapered ? 0.52 : (sA.isDot ? 0.60 : 0.75));
+      for (let b = a + 1; b < compiledStrokesInfo.length; b++) {
+        const sB = compiledStrokesInfo[b];
+        const maxFlatU_B = sB.isRisingTi ? 0.32 : (sB.isTapered ? 0.52 : (sB.isDot ? 0.60 : 0.75));
+
+        for (let iA = 0; iA < sA.pts.length - 1; iA += 2) {
+          const pA1 = sA.pts[iA];
+          const pA2 = sA.pts[Math.min(iA + 2, sA.pts.length - 1)];
+          const uMidA = 0.5 * (pA1.u + pA2.u);
+          if (uMidA < 0.18 || uMidA > 0.82) continue;
+
+          for (let iB = 0; iB < sB.pts.length - 1; iB += 2) {
+            const pB1 = sB.pts[iB];
+            const pB2 = sB.pts[Math.min(iB + 2, sB.pts.length - 1)];
+            const uMidB = 0.5 * (pB1.u + pB2.u);
+            if (uMidB < 0.18 || uMidB > 0.82) continue;
+
+            if (checkSegmentsIntersect(pA1, pA2, pB1, pB2)) {
+              // ALWAYS compare crossing_mean_ratio for interior crossings
+              const crossMeanRatio = Math.max(sA.meanW, sB.meanW) / Math.max(1.0, Math.min(sA.meanW, sB.meanW));
+              sA.evalObj.m11_crossing_mean_ratio = Math.max(sA.evalObj.m11_crossing_mean_ratio, crossMeanRatio);
+              sB.evalObj.m11_crossing_mean_ratio = Math.max(sB.evalObj.m11_crossing_mean_ratio, crossMeanRatio);
+
+              // Only compare local point width wA vs wB when both strokes are in their mid-body
+              if (uMidA >= 0.20 && uMidA <= maxFlatU_A && uMidB >= 0.20 && uMidB <= maxFlatU_B) {
+                const wA = sA.contourW[iA];
+                const wB = sB.contourW[iB];
+                const crossWRatio = Math.max(wA, wB) / Math.max(1.0, Math.min(wA, wB));
+                sA.evalObj.m11_crossing_width_ratio = Math.max(sA.evalObj.m11_crossing_width_ratio, crossWRatio);
+                sB.evalObj.m11_crossing_width_ratio = Math.max(sB.evalObj.m11_crossing_width_ratio, crossWRatio);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const longStrokes = compiledStrokesInfo.filter(d => (d.origLen || 0) >= 16.0);
+    if (longStrokes.length >= 2) {
+      const sortedW = longStrokes.map(d => d.meanW).sort((x, y) => x - y);
+      const mid = Math.floor(sortedW.length / 2);
+      const charMedianW = (sortedW.length % 2 !== 0) ? sortedW[mid] : 0.5 * (sortedW[mid - 1] + sortedW[mid]);
+      for (const d of longStrokes) {
+        d.evalObj.m11_char_width_ratio = d.meanW / Math.max(1.0, charMedianW);
+      }
+    }
+
+    for (const info of compiledStrokesInfo) {
+      info.evalObj.m11_crossing_width_ratio = Number(info.evalObj.m11_crossing_width_ratio.toFixed(2));
+      info.evalObj.m11_crossing_mean_ratio = Number(info.evalObj.m11_crossing_mean_ratio.toFixed(2));
+      info.evalObj.m11_char_width_ratio = Number(info.evalObj.m11_char_width_ratio.toFixed(2));
+    }
+
+    // Clean up DOM elements for this character to prevent memory accumulation
+    targetElement.remove();
 
     results[char] = {
       char,
@@ -856,6 +1300,13 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
   outEl.type = "application/json";
   outEl.textContent = JSON.stringify(results);
   document.body.appendChild(outEl);
+} catch (err) {
+    const errEl = document.createElement("script");
+    errEl.id = "eval-error";
+    errEl.type = "application/json";
+    errEl.textContent = JSON.stringify({ message: err ? err.message : "Unknown", stack: err ? err.stack : "" });
+    document.body.appendChild(errEl);
+  }
 })();
 """
 
@@ -877,21 +1328,6 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 </html>"""
 
 
-def extract_strokes_for_characters(chars: list[str]) -> dict[str, list[dict[str, Any]]]:
-    """Decomposes and extracts KanjiVG strokes for benchmark characters."""
-    char_map: dict[str, list[dict[str, Any]]] = {}
-    for ch in chars:
-        try:
-            tree = ids_parser.decompose_character(ch, max_depth=6, compute_bbox=True)
-            layer_info = glyph_service.extract_kanjivg_stroke_layers(ch, tree)
-            all_strokes = layer_info.get("all_strokes", [])
-            char_map[ch] = all_strokes
-        except Exception as e:
-            print(f"[WARN] Failed to extract strokes for '{ch}': {e}", file=sys.stderr)
-            char_map[ch] = []
-    return char_map
-
-
 def run_headless_evaluator(html_content: str) -> dict[str, Any]:
     """Executes evaluation HTML in headless Chrome and parses the eval-output JSON payload."""
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
@@ -910,9 +1346,14 @@ def run_headless_evaluator(html_content: str) -> dict[str, Any]:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         stdout = proc.stdout
 
+        err_match = re.search(r'<script id="eval-error" type="application/json">(.*?)</script>', stdout, re.DOTALL)
+        if err_match:
+            err_data = json.loads(err_match.group(1))
+            raise RuntimeError(f"Browser JS Exception: {err_data.get('message')}\nStack: {err_data.get('stack')}")
+
         match = re.search(r'<script id="eval-output" type="application/json">(.*?)</script>', stdout, re.DOTALL)
         if not match:
-            err_msg = f"Failed to extract eval-output from Chrome dump-dom.\nSTDERR: {proc.stderr[:1000]}"
+            err_msg = f"Failed to extract eval-output from Chrome dump-dom (stdout len={len(stdout)}).\nSTDOUT TAIL: {stdout[-500:]}\nSTDERR: {proc.stderr[:1000]}"
             raise RuntimeError(err_msg)
 
         json_data = json.loads(match.group(1))
@@ -922,8 +1363,15 @@ def run_headless_evaluator(html_content: str) -> dict[str, Any]:
             os.unlink(tmp_path)
 
 
+def _evaluate_batch_worker(payload: tuple[dict[str, list[dict[str, Any]]], str]) -> dict[str, Any]:
+    """Worker function for parallel headless Chrome batch execution."""
+    batch_char_strokes, app_js_content = payload
+    batch_html = build_evaluation_html(batch_char_strokes, app_js_content)
+    return run_headless_evaluator(batch_html)
+
+
 def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
-    """Checks whether a stroke violates thresholds across metrics M1-M9."""
+    """Checks whether a stroke violates thresholds across metrics M1-M12."""
     defects = {
         "M1_folds": (
             stroke["m1_retrograde_steps"] >= THRESHOLDS["m1_retrograde_steps"]
@@ -961,22 +1409,41 @@ def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
             )
         ),
         "M9_bulbous": (
-            not stroke.get("isDot", False)
-            and (
-                stroke["m9_mid_bulge_ratio"] > THRESHOLDS["m9_max_mid_bulge_ratio"]
-                or stroke["m9_max_body_ratio"] > THRESHOLDS["m9_max_body_ratio"]
-                or stroke["m9_mid_arch_excess_px"] > THRESHOLDS["m9_max_mid_arch_excess_px"]
+            stroke["m9_mid_bulge_ratio"] > THRESHOLDS["m9_max_mid_bulge_ratio"]
+            or stroke["m9_max_body_ratio"] > THRESHOLDS["m9_max_body_ratio"]
+            or stroke["m9_mid_arch_excess_px"] > THRESHOLDS["m9_max_mid_arch_excess_px"]
+        ),
+        "M10_short_round": (
+            stroke["m10_length_to_width_ratio"] < THRESHOLDS["m10_min_length_to_width_ratio"]
+            or stroke["m10_raster_aspect_ratio"] < THRESHOLDS["m10_min_raster_aspect_ratio"]
+            or (
+                (stroke.get("isDot") or stroke.get("isCrownDot"))
+                and stroke["m10_dot_end_bloat_ratio"] > THRESHOLDS["m10_max_dot_end_bloat_ratio"]
             )
+        ),
+        "M11_width_mismatch": (
+            stroke["m11_crossing_width_ratio"] > THRESHOLDS["m11_max_crossing_width_ratio"]
+            or stroke["m11_crossing_mean_ratio"] > THRESHOLDS["m11_max_crossing_mean_ratio"]
+            or stroke["m11_char_width_ratio"] > THRESHOLDS["m11_max_char_width_ratio"]
+            or stroke["m11_char_width_ratio"] < THRESHOLDS["m11_min_char_width_ratio"]
+        ),
+        "M12_terminal_or_corner_bloat": (
+            stroke["m12_tome_ratio"] > THRESHOLDS["m12_max_tome_ratio"]
+            or stroke["m12_corner_bloat_ratio"] > THRESHOLDS["m12_max_corner_bloat_ratio"]
         ),
     }
     return defects
 
 
-def print_evaluation_summary(results: dict[str, Any]) -> None:
+def print_evaluation_summary(
+    results: dict[str, Any],
+    only_defects: bool = False,
+    summary_only: bool = False,
+) -> None:
     """Formats and prints clean human-readable tables per character and aggregate summaries."""
-    print("=" * 130)
+    print("=" * 165)
     print(" PROGRAMMATIC CANVAS BRUSHWORK EVALUATOR — SLENDER GOLD ENGINE AUDIT (HEADLESS CHROME)")
-    print("=" * 130)
+    print("=" * 165)
 
     total_strokes_all = 0
     defect_counts = {
@@ -989,35 +1456,68 @@ def print_evaluation_summary(results: dict[str, Any]) -> None:
         "M7_topology": 0,
         "M8_taper": 0,
         "M9_bulbous": 0,
+        "M10_short_round": 0,
+        "M11_width_mismatch": 0,
+        "M12_terminal_or_corner_bloat": 0,
     }
     hook_strokes_total = 0
     tapered_strokes_total = 0
-    non_dot_strokes_total = 0
+    defective_strokes: list[dict[str, Any]] = []
+
+    filter_defects_only = only_defects or (len(results) > 50)
 
     for char, cdata in results.items():
         strokes = cdata.get("strokes", [])
         total_strokes_all += len(strokes)
-        print(f"\nKanji: 【{char}】 ({len(strokes)} strokes) | Full Canvas Render: {'PASS' if cdata.get('fullRenderSuccess') else 'FAIL'} ({cdata.get('fullInkPixels', 0):,} ink px)")
-        print("-" * 130)
-        headers = [
-            "#", "Type", "M1 Folds", "M2 d2/Flip", "M3 Hook Err",
-            "M4 Step/End", "M5 Kasure", "M6 Spine", "M7 Isl", "M8 Tip/u90/Slp", "M9 Mid/Body/Arch", "Defects"
-        ]
-        row_fmt = "{:<3} {:<5} {:<11} {:<12} {:<12} {:<14} {:<9} {:<11} {:<7} {:<16} {:<16} {:<8}"
-        print(row_fmt.format(*headers))
-        print("-" * 130)
+
+        char_has_defects = False
+        rows_to_print = []
 
         for s in strokes:
             defects = evaluate_defects(s)
-            for k, is_defect in defects.items():
-                if is_defect:
+            is_defective = any(defects.values())
+            if is_defective:
+                char_has_defects = True
+                details = []
+                if defects["M1_folds"]:
+                    details.append(f"M1(folds={s['m1_retrograde_steps']}, self_intersect={s['m1_self_intersections']})")
+                if defects["M2_jitter"]:
+                    details.append(f"M2(d2={s['m2_edge_d2_px']:.2f}, flip={s['m2_normal_sign_flip_rate']:.2f})")
+                if defects["M3_hook"]:
+                    details.append(f"M3(tip_err={s['m3_hook_tip_error_px']:.1f}px, ang_err={s['m3_hook_angle_error_deg']:.0f}°, jump={s['m3_hook_splice_jump_px']:.1f}px)")
+                if defects["M4_raster_step"]:
+                    details.append(f"M4(step={s['m4_max_width_step_px']:.1f}px, unreached={s['m4_kvg_endpoint_unreached_px']:.1f}px)")
+                if defects["M5_kasure_barcode"]:
+                    details.append(f"M5(gaps={s['m5_max_cross_section_gaps']})")
+                if defects["M6_spine_oscillation"]:
+                    details.append(f"M6(osc={s['m6_spine_tone_oscillation']}, ripple={s['m6_spine_tone_ripple']:.1f})")
+                if defects["M7_topology"]:
+                    details.append(f"M7(components={s['m7_disconnected_components']})")
+                if defects["M8_taper"]:
+                    details.append(f"M8(tip={s['m8_tip_ratio']:.2f}, u80={s['m8_u80_ratio']:.2f}, u90={s['m8_u90_ratio']:.2f}, slp={s['m8_slope_dev']:+.2f})")
+                if defects["M9_bulbous"]:
+                    details.append(f"M9(mid={s['m9_mid_bulge_ratio']:.2f}, body={s['m9_max_body_ratio']:.2f}, arch={s['m9_mid_arch_excess_px']:.1f}px)")
+                if defects["M10_short_round"]:
+                    details.append(f"M10(L/W={s['m10_length_to_width_ratio']:.2f}, asp={s['m10_raster_aspect_ratio']:.2f}, dot_end={s['m10_dot_end_bloat_ratio']:.2f})")
+                if defects["M11_width_mismatch"]:
+                    details.append(f"M11(cross_w={s['m11_crossing_width_ratio']:.2f}, cross_mean={s['m11_crossing_mean_ratio']:.2f}, char_w={s['m11_char_width_ratio']:.2f})")
+                if defects["M12_terminal_or_corner_bloat"]:
+                    details.append(f"M12(tome={s['m12_tome_ratio']:.2f}, corner={s['m12_corner_bloat_ratio']:.2f})")
+                defective_strokes.append({
+                    "char": char,
+                    "strokeIndex": s["strokeIndex"],
+                    "type": s["type"],
+                    "component": s.get("component", ""),
+                    "details": details,
+                })
+
+            for k, is_def in defects.items():
+                if is_def:
                     defect_counts[k] += 1
             if s["hasHook"]:
                 hook_strokes_total += 1
             if s.get("isTapered"):
                 tapered_strokes_total += 1
-            if not s.get("isDot"):
-                non_dot_strokes_total += 1
 
             active_defects = [k.split("_")[0] for k, v in defects.items() if v]
             defect_str = ",".join(active_defects) if active_defects else "NONE"
@@ -1030,9 +1530,15 @@ def print_evaluation_summary(results: dict[str, Any]) -> None:
             m6_val = f"p:{s['m6_spine_tone_oscillation']} r:{s['m6_spine_tone_ripple']:.1f}"
             m7_val = f"c:{s['m7_disconnected_components']}"
             m8_val = f"{s['m8_tip_ratio']:.2f}/{s['m8_u90_ratio']:.2f}/{s['m8_slope_dev']:+.2f}" if s.get("isTapered") else "N/A"
-            m9_val = f"{s['m9_mid_bulge_ratio']:.2f}/{s['m9_max_body_ratio']:.2f}/{s['m9_mid_arch_excess_px']:.1f}" if not s.get("isDot") else "N/A"
+            m9_val = f"{s['m9_mid_bulge_ratio']:.2f}/{s['m9_max_body_ratio']:.2f}/{s['m9_mid_arch_excess_px']:.1f}"
+            if s.get("isDot") or s.get("isCrownDot"):
+                m10_val = f"{s['m10_length_to_width_ratio']:.1f}/{s['m10_raster_aspect_ratio']:.1f}/{s['m10_dot_end_bloat_ratio']:.2f}"
+            else:
+                m10_val = f"{s['m10_length_to_width_ratio']:.1f}/{s['m10_raster_aspect_ratio']:.1f}"
+            m11_val = f"{s['m11_crossing_width_ratio']:.2f}/{s['m11_char_width_ratio']:.2f}"
+            m12_val = f"{s['m12_tome_ratio']:.2f}/{s['m12_corner_bloat_ratio']:.2f}"
 
-            print(row_fmt.format(
+            rows_to_print.append((
                 s["strokeIndex"],
                 s["type"][:5],
                 m1_val,
@@ -1044,18 +1550,34 @@ def print_evaluation_summary(results: dict[str, Any]) -> None:
                 m7_val,
                 m8_val,
                 m9_val,
-                defect_str
+                m10_val,
+                m11_val,
+                m12_val,
+                defect_str,
             ))
 
-    print("\n" + "=" * 130)
+        if not summary_only and (not filter_defects_only or char_has_defects):
+            print(f"\nKanji: 【{char}】 ({len(strokes)} strokes) | Full Canvas Render: {'PASS' if cdata.get('fullRenderSuccess') else 'FAIL'} ({cdata.get('fullInkPixels', 0):,} ink px)")
+            print("-" * 165)
+            headers = [
+                "#", "Type", "M1 Folds", "M2 d2/Flip", "M3 Hook Err",
+                "M4 Step/End", "M5 Kasure", "M6 Spine", "M7 Isl", "M8 Tip/u90/Slp", "M9 Mid/Body/Arch",
+                "M10 L/W/Asp", "M11 Cross/Ch", "M12 Tome/Crn", "Defects"
+            ]
+            row_fmt = "{:<3} {:<5} {:<11} {:<12} {:<13} {:<14} {:<9} {:<11} {:<7} {:<16} {:<16} {:<14} {:<13} {:<13} {:<18}"
+            print(row_fmt.format(*headers))
+            print("-" * 165)
+            for row in rows_to_print:
+                print(row_fmt.format(*row))
+
+    print("\n" + "=" * 165)
     print(" AGGREGATE BRUSHWORK DEFECT AUDIT REPORT")
-    print("=" * 130)
+    print("=" * 165)
     print(f"Total Evaluated Characters : {len(results)}")
     print(f"Total Evaluated Strokes    : {total_strokes_all}")
     print(f"Total Strokes with Hooks   : {hook_strokes_total}")
     print(f"Total Tapered Strokes      : {tapered_strokes_total}")
-    print(f"Total Non-Dot Strokes      : {non_dot_strokes_total}")
-    print("-" * 130)
+    print("-" * 165)
     print("Defect Breakdown by Metric:")
     metric_names = [
         ("M1: Retrograde Boundary Folds & Self-Intersections", defect_counts["M1_folds"], total_strokes_all),
@@ -1066,15 +1588,31 @@ def print_evaluation_summary(results: dict[str, Any]) -> None:
         ("M6: Longitudinal Spine Tone Oscillation / Polka-Dot", defect_counts["M6_spine_oscillation"], total_strokes_all),
         ("M7: Topological Severance (Disconnected Islands)", defect_counts["M7_topology"], total_strokes_all),
         ("M8: Taper Quality (Pointed Tip, Anti-Wispy, Linear Slope)", defect_counts["M8_taper"], tapered_strokes_total if tapered_strokes_total else 1),
-        ("M9: Bulbous Middle / Belly Bloating (e.g. 涙 ㇏)", defect_counts["M9_bulbous"], non_dot_strokes_total if non_dot_strokes_total else 1),
+        ("M9: Bulbous Middle / Belly Bloating", defect_counts["M9_bulbous"], total_strokes_all),
+        ("M10: Short-Stroke & Dot Elongation / Anti-Roundness", defect_counts["M10_short_round"], total_strokes_all),
+        ("M11: Width Consistency Across Crossing & Character Strokes", defect_counts["M11_width_mismatch"], total_strokes_all),
+        ("M12: Terminal Tome Clubbing & Corner Webbing", defect_counts["M12_terminal_or_corner_bloat"], total_strokes_all),
     ]
 
     for label, count, denom in metric_names:
         pct = (count / denom * 100) if denom > 0 else 0.0
         bar = "█" * int(round(pct / 5)) + "░" * (20 - int(round(pct / 5)))
-        print(f"  {label:<60} : {count:>3} / {denom:>3} ({pct:>5.1f}%) [{bar}]")
+        print(f"  {label:<64} : {count:>4} / {denom:>4} ({pct:>5.1f}%) [{bar}]")
 
-    print("=" * 130)
+    print("=" * 165)
+
+    if defective_strokes:
+        print(f"\n DEFECTIVE STROKES DETAIL (Showing {min(len(defective_strokes), 50)} of {len(defective_strokes)} defective strokes across {len(results)} characters)")
+        print("=" * 165)
+        for ds in defective_strokes[:50]:
+            comp_info = f" ({ds['component']})" if ds["component"] else ""
+            print(f"  - 【{ds['char']}】 Stroke #{ds['strokeIndex']} [{ds['type']}{comp_info}]: " + "; ".join(ds["details"]))
+        if len(defective_strokes) > 50:
+            print(f"  ... and {len(defective_strokes) - 50} more defective strokes (use --json-out to inspect full list)")
+        print("=" * 165)
+    else:
+        print(f"\n ALL STROKES PASSED EVALUATION WITH ZERO DEFECTS ACROSS {len(results)} CHARACTERS ({total_strokes_all} STROKES)!")
+        print("=" * 165)
 
 
 def main() -> None:
@@ -1085,7 +1623,40 @@ def main() -> None:
         "--chars",
         type=str,
         default="",
-        help="Comma or space-separated list of characters to evaluate (default: 永,水,嵐,成,九,子,心,道)",
+        help="Comma or space-separated list of characters to evaluate",
+    )
+    parser.add_argument(
+        "--joyo",
+        action="store_true",
+        help="Evaluate all 2,136 Jōyō kanji from data/kanji_explorer.db",
+    )
+    parser.add_argument(
+        "--grade",
+        type=str,
+        default="",
+        help="Optional comma-separated list of grades (e.g. 1,2,3) to evaluate from data/kanji_explorer.db",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional integer limit on number of characters evaluated",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=min(8, os.cpu_count() or 4),
+        help=f"Number of parallel headless Chrome worker processes when evaluating > 40 characters (default: {min(8, os.cpu_count() or 4)})",
+    )
+    parser.add_argument(
+        "--only-defects",
+        action="store_true",
+        help="Only print individual character tables for characters that have at least 1 defect",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Skip per-character tables and only print aggregate report and defective strokes",
     )
     parser.add_argument(
         "--json-out",
@@ -1096,10 +1667,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.chars.strip():
-        # Handle comma or space separation
         chars = [c.strip() for c in re.split(r"[\s,]+", args.chars.strip()) if c.strip()]
+    elif args.joyo:
+        chars = load_characters_from_db(joyo=True)
+    elif args.grade.strip():
+        chars = load_characters_from_db(grades_str=args.grade.strip())
     else:
-        chars = DEFAULT_BENCHMARK_CHARS
+        chars = list(DEFAULT_BENCHMARK_CHARS)
+
+    if args.limit is not None and args.limit > 0:
+        chars = chars[: args.limit]
 
     if not APP_JS_PATH.exists():
         print(f"Error: {APP_JS_PATH} does not exist.", file=sys.stderr)
@@ -1107,11 +1684,40 @@ def main() -> None:
 
     app_js_content = APP_JS_PATH.read_text(encoding="utf-8")
 
+    t_extract_start = time.time()
     char_strokes = extract_strokes_for_characters(chars)
-    html_content = build_evaluation_html(char_strokes, app_js_content)
+    t_extract_elapsed = time.time() - t_extract_start
 
-    results = run_headless_evaluator(html_content)
-    print_evaluation_summary(results)
+    if len(chars) > 40:
+        print(f"[INFO] Extracted KanjiVG strokes for {len(chars)} characters in {t_extract_elapsed:.2f}s")
+        batch_size = 120
+        batches = []
+        for i in range(0, len(chars), batch_size):
+            batch_chars = chars[i : i + batch_size]
+            batch_strokes = {ch: char_strokes.get(ch, []) for ch in batch_chars}
+            batches.append((batch_strokes, app_js_content))
+
+        results: dict[str, Any] = {}
+        workers = max(1, args.workers)
+        print(f"[INFO] Evaluating {len(chars)} characters in {len(batches)} batches across {workers} headless Chrome workers...")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            future_to_batch = {executor.submit(_evaluate_batch_worker, b): b[0] for b in batches}
+            for fut in concurrent.futures.as_completed(future_to_batch):
+                batch_res = fut.result()
+                results.update(batch_res)
+
+        # Restore original character order
+        ordered_results = {ch: results[ch] for ch in chars if ch in results}
+        results = ordered_results
+    else:
+        html_content = build_evaluation_html(char_strokes, app_js_content)
+        results = run_headless_evaluator(html_content)
+
+    print_evaluation_summary(
+        results,
+        only_defects=args.only_defects,
+        summary_only=args.summary_only,
+    )
 
     if args.json_out:
         out_path = Path(args.json_out).resolve()

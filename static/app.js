@@ -663,12 +663,17 @@ const SLENDER_PHYSICS = {
 /**
  * 永字八法・筆画種別分類
  */
-function classifyStrokeBehavior(stroke) {
+function classifyStrokeBehavior(stroke, origLen = 25) {
   const rawT = stroke.type || '';
   const primary = rawT.split('/')[0].trim();
   const t = primary;
   const name = (stroke.stroke_name || '').toLowerCase();
   const comp = (stroke.component || '').trim();
+
+  const isLongComposite = origLen >= 18;
+  const hasNaTail = isLongComposite && (rawT.includes('/㇏') || rawT.includes('/㇀'));
+  const hasSweepTail = isLongComposite && (rawT.includes('/㇒') || rawT.includes('/㇓'));
+  const isShortNaDot = t.includes('㇏') && origLen < 15;
 
   // In 子, 了, 孑, the top stroke is 横撇 (héng piě), even if tagged as ㇖ in KanjiVG
   const isZiHengPie = (comp === '子' || comp === '了' || comp === '孑') && (t.includes('㇖') || t.includes('㇇') || name.includes('横撇') || name.includes('piě'));
@@ -686,13 +691,14 @@ function classifyStrokeBehavior(stroke) {
   const isRisingTi = t.includes('㇀') || name.includes('tí') || name.includes('提');
   const isVerticalTi = t.includes('㇙') || t.includes('㇊');
   const isVerticalSweep = t.includes('㇓');
-  const isRightNa = (t.includes('㇏') || name.includes('nà') || name.includes('捺')) && !t.includes('㇔');
-  const isCrownDot = t === '㇑a' && (comp === '宀' || comp === '亠' || comp === '广' || comp === '疒' || comp === '穴');
-  const isDot = (t.includes('㇔') || isCrownDot || name.includes('diǎn') || name.includes('点')) && !isRightNa && !isRisingTi;
+  const isRightNa = (((t.includes('㇏') || name.includes('nà') || name.includes('捺')) && !t.includes('㇔') && !isShortNaDot) || (t.includes('㇔') && hasNaTail));
+  const isCrownDot = (t === '㇑a' && (comp === '宀' || comp === '亠' || comp === '广' || comp === '疒' || comp === '穴' || comp === '立' || comp === '文' || comp === '言' || comp === '衣' || comp === '方' || comp === '主' || comp === '市' || comp === '亡' || comp === '高' || comp === '京' || comp === '玄' || comp === '率'));
+  const isDot = (t.includes('㇔') || isShortNaDot || name.includes('diǎn') || name.includes('点')) && !isCrownDot && !isRightNa && !isRisingTi && !hasNaTail && !hasSweepTail;
 
   // isSweepEnd covers free-air left sweeps and folds that sweep
   const isSweepEnd = !isHook && !isDot && !isRightNa && !isRisingTi && !isVerticalTi && (
     t.includes('㇒') || t.includes('㇇') || t.includes('㇋') || isVerticalSweep || isZiHengPie || isRoofHook ||
+    (t.includes('㇔') && hasSweepTail) ||
     name.includes('piě') || name.includes('撇')
   );
 
@@ -703,6 +709,8 @@ function classifyStrokeBehavior(stroke) {
     t.includes('㇛') || t.includes('㇜') || t.includes('㇞') || t.includes('㇟') ||
     t.includes('㇠') || t.includes('㇡') || isZiHengPie || isRoofHook ||
     name.includes('zhé') || name.includes('折');
+
+  const isPieZhe = t.includes('㇜') || t.includes('㇛');
 
   const isHorizontal = t.includes('㇐') || name.includes('héng') || name.includes('横');
   const isVertical = t.includes('㇑') || name.includes('shù') || name.includes('竪');
@@ -717,9 +725,11 @@ function classifyStrokeBehavior(stroke) {
     isVerticalTi,
     isVerticalSweep,
     isRightNa,
+    isCrownDot,
     isDot,
     isHook,
     isFold,
+    isPieZhe,
     isHorizontal,
     isVertical,
     isConnectingVertical
@@ -829,7 +839,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     });
   }
 
-  const behavior = classifyStrokeBehavior(stroke);
+  const behavior = classifyStrokeBehavior(stroke, origLen);
 
   // Extension for 子 top connecting stroke to solidly overlap into stroke 7 entry head
   if (behavior.isZiHengPie && rawPts.length > 8) {
@@ -850,7 +860,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
   }
 
   // Initial entry-tangent alignment for all non-dot strokes (eliminates initial vector spurs)
-  if (!behavior.isDot && rawPts.length > 8 && origLen > 8) {
+  if (!behavior.isDot && !behavior.isCrownDot && rawPts.length > 8 && origLen > 8) {
     const anchorS = Math.min(origLen * 0.20, 2.8);
     const lookS = Math.min(origLen * 0.42, 5.5);
     const anchorIdx = Math.min(numSamples - 2, Math.max(2, Math.round((anchorS / origLen) * numSamples)));
@@ -974,8 +984,8 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
 
   // Corner features detection (excluding hook region)
   const cornerFeatures = [];
-  const minCornerS = 5.0;
-  const maxCornerS = hookFeature ? hookFeature.s - 6.5 : origLen - 4.5;
+  const minCornerS = Math.min(5.0, origLen * 0.22);
+  const maxCornerS = hookFeature ? hookFeature.s - 6.5 : origLen - Math.min(4.5, origLen * 0.22);
   const minSep = Math.max(4, Math.round(3.2 / step));
 
   for (let i = win + 2; i < numSamples - win - 2; i++) {
@@ -1070,8 +1080,11 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
 
   // Full muscular stroke weight
   const densityScale = totalCharStrokes >= 13 ? 0.95 : (totalCharStrokes >= 9 ? 1.04 : 1.14);
-  const curveWeightBoost = (behavior.isSweepEnd || behavior.isHook || behavior.isRightNa) ? 1.15 : 1.05;
-  const shaftRadius = (boxSize * 0.024) * SLENDER_PHYSICS.thickness * densityScale * curveWeightBoost;
+  const curveWeightBoost = 1.08;
+  const baseShaftRadius = (boxSize * 0.024) * SLENDER_PHYSICS.thickness * densityScale * curveWeightBoost;
+  // Scale down radius on short strokes (totalLen < 18 SVG units) so length-to-width ratio is always >= 2.65
+  const maxShortRadius = Math.max(2.0, (totalLen * scale) / 5.8);
+  const shaftRadius = Math.min(baseShaftRadius, maxShortRadius);
   const tonMult = SLENDER_PHYSICS.tonStrength;
   const waistMult = SLENDER_PHYSICS.waistRatio;
 
@@ -1089,26 +1102,46 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     let wR = 1.0;
     let poolWeight = 0.25;
 
-    if (behavior.isDot) {
-      // 点 (diǎn) - natural softly rounded 45° entry tip swelling down-right into broad, plush heel
-      const arch = Math.sin(Math.pow(u, 0.82) * (Math.PI * 0.72));
-      wL = 0.28 + (1.05 * tonMult) * arch;
-      wR = 0.26 + (0.90 * tonMult) * arch;
-      poolWeight = 0.40 + 0.55 * arch;
+    if (behavior.isCrownDot) {
+      const entryRise = Math.min(1.0, u / 0.18);
+      const entryFactor = 0.72 + 0.28 * Math.sin(entryRise * Math.PI * 0.5);
+      const taper = 1.0 - 0.42 * Math.pow(u, 1.05);
+      wL = 0.90 * entryFactor * taper;
+      wR = 0.86 * entryFactor * taper;
+      poolWeight = 0.75 * (1.0 - 0.6 * u);
+    } else if (behavior.isDot) {
+      if (u <= 0.22) {
+        const t = u / 0.22;
+        const sCurve = Math.sin(t * Math.PI * 0.5);
+        wL = 0.66 + 0.24 * sCurve;
+        wR = 0.64 + 0.24 * sCurve;
+        poolWeight = 0.35 + 0.45 * sCurve;
+      } else if (u <= 0.64) {
+        const t = (u - 0.22) / 0.42;
+        wL = 0.90 - 0.02 * t;
+        wR = 0.88 - 0.02 * t;
+        poolWeight = 0.80 - 0.10 * t;
+      } else {
+        const t = (u - 0.64) / 0.36;
+        const decay = 1.0 - 0.52 * Math.pow(t, 1.05);
+        wL = 0.88 * decay;
+        wR = 0.86 * decay;
+        poolWeight = 0.70 * decay;
+      }
     } else if (behavior.isRisingTi) {
       // 提 (tí) - rising stroke with steady calligraphic slope attack to sharp point
-      const headZone = Math.min(totalLen * 0.26, 4.5);
+      const headZone = Math.min(totalLen * 0.28, 4.8);
       if (s < headZone) {
         const t = s / headZone;
         const blend = 0.5 * (1 + Math.cos(t * Math.PI));
-        wL = 0.88 + (0.32 * tonMult) * blend;
-        wR = 0.92 + (0.42 * tonMult) * blend;
+        wL = 0.84 + (0.14 * tonMult) * blend;
+        wR = 0.88 + (0.18 * tonMult) * blend;
         poolWeight = 0.85;
       } else {
         const t = (s - headZone) / Math.max(0.1, totalLen - headZone);
-        const taper = 1.0 - 0.90 * Math.pow(t, 1.05);
-        wL = 0.88 * taper;
-        wR = 0.92 * taper;
+        const taper = 1.0 - 0.88 * Math.pow(t, 0.92);
+        wL = 0.92 * taper;
+        wR = 0.94 * taper;
         poolWeight = 0.35 * (1 - t);
       }
     } else if (behavior.isRightNa) {
@@ -1117,14 +1150,14 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       if (u <= footU) {
         const t = u / footU;
         const swell = Math.pow(t, 1.15);
-        wL = 0.58 + (0.90 - 0.58) * swell;
-        wR = 0.58 + (1.06 - 0.58) * swell;
+        wL = 0.68 + (0.88 - 0.68) * swell;
+        wR = 0.68 + (0.98 - 0.68) * swell;
         poolWeight = 0.30 + 0.65 * swell;
       } else {
         const tFoot = (u - footU) / (1.0 - footU);
         const decay = 1.0 - 0.90 * Math.pow(tFoot, 1.05);
-        wL = 0.90 * decay;
-        wR = 1.06 * decay;
+        wL = 0.88 * decay;
+        wR = 0.98 * decay;
         poolWeight = 0.95 * decay;
       }
     } else {
@@ -1144,14 +1177,14 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         poolWeight = 0.85 * blend + 0.25;
 
         if (isDownEntry) {
-          wL += (0.38 * tonMult) * blend;
-          wR += (0.16 * tonMult) * blend;
+          wL += (0.22 * tonMult) * blend;
+          wR += (0.10 * tonMult) * blend;
         } else if (isRightToLeftSweep) {
-          wR += (0.36 * tonMult) * blend;
-          wL += (0.20 * tonMult) * blend;
+          wR += (0.22 * tonMult) * blend;
+          wL += (0.12 * tonMult) * blend;
         } else {
-          wL = shaftTension * (1.0 + 0.08 * blend);
-          wR = shaftTension * (1.0 + 0.14 * blend);
+          wL = shaftTension * (1.0 + 0.06 * blend);
+          wR = shaftTension * (1.0 + 0.10 * blend);
         }
         wL *= entryWidthFactor;
         wR *= entryWidthFactor;
@@ -1164,13 +1197,17 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const t = d / 4.5;
           const bell = 0.5 * (1 + Math.cos(t * Math.PI));
           poolWeight = Math.max(poolWeight, 0.95 * bell);
+          const isAcute = behavior.isPieZhe && cf.angle > 1.0;
+          const outerBoost = (isAcute ? 0.0 : 0.16) * tonMult;
+          const innerPinch = isAcute ? 0.52 : 0.14;
+          const innerFloor = isAcute ? 0.20 : 0.68;
 
           if (cf.turnSign >= 0) {
-            wR += (0.28 * tonMult) * bell;
-            wL = Math.max(0.68, wL - 0.12 * bell);
+            wR += outerBoost * bell;
+            wL = Math.max(innerFloor, wL - innerPinch * bell);
           } else {
-            wL += (0.28 * tonMult) * bell;
-            wR = Math.max(0.68, wR - 0.12 * bell);
+            wL += outerBoost * bell;
+            wR = Math.max(innerFloor, wR - innerPinch * bell);
           }
         }
       }
@@ -1178,23 +1215,26 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       // Hook Resting Heel & Flick
       if (hookFeature) {
         const hs = hookFeature.s;
+        const isSharpHook = hookFeature.angle >= 1.85;
+        const outerIsL = (hookFeature.flickUx < 0 && p.tx < 0.3) || (hookFeature.flickUy < -0.5 && p.turnSign < 0);
         if (s < hs) {
           const dHeel = hs - s;
-          const heelRange = (behavior.isCurvedBowHook || (stroke.type || "").includes("㇈") || (stroke.type || "").includes("㇃") || (stroke.type || "").includes("㇆")) ? 16.0 : 7.0;
+          const heelRange = (behavior.isCurvedBowHook || (stroke.type || "").includes("㇈") || (stroke.type || "").includes("㇃") || (stroke.type || "").includes("㇆") || (stroke.type || "").includes("㇟")) ? 16.0 : 7.0;
           if (dHeel < heelRange) {
             const tHeel = dHeel / heelRange;
             const heelBell = 0.5 * (1 + Math.cos(tHeel * Math.PI));
-            const outerIsL = (hookFeature.flickUx < 0 && p.tx < 0.3) || (hookFeature.flickUy < -0.5 && p.turnSign < 0);
+            const heelAmp = (isSharpHook ? 0.18 : 0.11) * tonMult;
             if (outerIsL) {
-              wL += (0.22 * tonMult) * heelBell;
+              wL += heelAmp * heelBell;
             } else {
-              wR += (0.22 * tonMult) * heelBell;
+              wR += heelAmp * heelBell;
             }
             poolWeight = Math.max(poolWeight, 0.95 * heelBell);
           }
         } else {
           const tFlick = (s - hs) / Math.max(0.1, totalLen - hs);
-          const flickTaper = 1.0 - 0.90 * Math.pow(tFlick, 0.88);
+          const flickExp = isSharpHook ? 0.85 : 0.94;
+          const flickTaper = 1.0 - 0.90 * Math.pow(tFlick, flickExp);
           wL *= flickTaper;
           wR *= flickTaper;
           poolWeight = Math.max(0.1, 0.8 * (1.0 - tFlick));
@@ -1203,7 +1243,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         const cornerU = cornerFeatures[0] ? cornerFeatures[0].u : 0.78;
         if (u > cornerU) {
           const tHook = (u - cornerU) / (1 - cornerU);
-          const taper = 1.0 - 0.90 * Math.pow(tHook, 1.05);
+          const taper = 1.0 - 0.90 * Math.pow(tHook, 0.78);
           wL *= taper;
           wR *= taper;
         }
@@ -1212,7 +1252,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         const cornerU = lastCf ? lastCf.u : 0.75;
         if (u > cornerU) {
           const tTi = (u - cornerU) / (1 - cornerU);
-          const taper = 1.0 - 0.90 * Math.pow(tTi, 1.05);
+          const taper = 1.0 - 0.90 * Math.pow(tTi, 0.78);
           wL *= taper;
           wR *= taper;
         }
@@ -1227,13 +1267,23 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           }
         } else {
           const lastCf = cornerFeatures.length > 0 ? cornerFeatures[cornerFeatures.length - 1] : null;
-          const sweepStart = (lastCf && lastCf.u > 0.42) ? lastCf.u : (isRightToLeftSweep ? 0.30 : 0.34);
+          const isPostCornerSweep = !!(lastCf && lastCf.u > 0.44);
+          const sweepStart = isPostCornerSweep ? lastCf.u : 0.43;
           if (u > sweepStart) {
             const tSweep = (u - sweepStart) / (1 - sweepStart);
-            const taper = 1.0 - 0.90 * Math.pow(tSweep, 1.05);
+            const exp = isPostCornerSweep ? 0.82 : 0.98;
+            const taper = 1.0 - 0.90 * Math.pow(tSweep, exp);
             wL *= taper;
             wR *= taper;
           }
+        }
+      } else if (behavior.isPieZhe) {
+        const cornerU = cornerFeatures[0] ? cornerFeatures[0].u : 0.45;
+        if (u > cornerU) {
+          const tLeg = (u - cornerU) / Math.max(0.1, 1.0 - cornerU);
+          const taper = 1.0 - 0.36 * Math.pow(tLeg, 0.95);
+          wL *= taper;
+          wR *= taper;
         }
       } else if (behavior.isVertical && !behavior.isFold) {
         const endDist = totalLen - s;
@@ -1242,11 +1292,11 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const t = 1 - (endDist / tomeZone);
           const smoothT = 0.5 * (1 - Math.cos(t * Math.PI));
           if (behavior.isConnectingVertical) {
-            wL += (0.15 * tonMult) * smoothT;
-            wR += (0.15 * tonMult) * smoothT;
+            wL += (0.03 * tonMult) * smoothT;
+            wR += (0.03 * tonMult) * smoothT;
           } else {
-            wL += (0.30 * tonMult) * smoothT;
-            wR += (0.30 * tonMult) * smoothT;
+            wL += (0.06 * tonMult) * smoothT;
+            wR += (0.06 * tonMult) * smoothT;
             poolWeight = Math.max(poolWeight, 0.85 * smoothT);
           }
         }
@@ -1256,8 +1306,8 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         if (endDist < tomeZone) {
           const t = 1 - (endDist / tomeZone);
           const smoothT = 0.5 * (1 - Math.cos(t * Math.PI));
-          wL += (0.30 * tonMult) * smoothT;
-          wR += (0.42 * tonMult) * smoothT;
+          wL += (0.05 * tonMult) * smoothT;
+          wR += (0.07 * tonMult) * smoothT;
           poolWeight = Math.max(poolWeight, 0.88 * smoothT);
         }
       }
@@ -1280,7 +1330,9 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     const ds = Math.max(0.1, (rawPts[iNext].s - rawPts[iPrev].s) * scale);
     const kappa = dTheta / ds;
     if (kappa > 1e-4) {
-      const maxR = Math.max(shaftRadius * 0.70, 0.90 / kappa);
+      const nearAcuteCf = behavior.isPieZhe && cornerFeatures.some(cf => cf.angle > 1.0 && Math.abs(rawPts[i].s - cf.s) <= 4.5);
+      const floorMult = nearAcuteCf ? 0.22 : 0.78;
+      const maxR = Math.max(shaftRadius * floorMult, 0.90 / kappa);
       const cross = rawPts[iPrev].tx * rawPts[iNext].ty - rawPts[iPrev].ty * rawPts[iNext].tx;
       if (cross > 0) {
         rL = Math.min(rL, maxR);
@@ -1339,9 +1391,93 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
+  // Self-intersection loop collapsing
+  function collapsePolylineLoops(pts, isLeft) {
+    const getP = (idx) => isLeft ? { x: pts[idx].lx, y: pts[idx].ly } : { x: pts[idx].rx, y: pts[idx].ry };
+    const setP = (idx, x, y) => {
+      if (isLeft) {
+        pts[idx].lx = x;
+        pts[idx].ly = y;
+      } else {
+        pts[idx].rx = x;
+        pts[idx].ry = y;
+      }
+    };
+    function ccw(p1, p2, p3) {
+      return (p3.y - p1.y) * (p2.x - p1.x) - (p2.y - p1.y) * (p3.x - p1.x);
+    }
+    function checkIntersect(p1, p2, p3, p4) {
+      const min1x = Math.min(p1.x, p2.x), max1x = Math.max(p1.x, p2.x);
+      const min1y = Math.min(p1.y, p2.y), max1y = Math.max(p1.y, p2.y);
+      const min2x = Math.min(p3.x, p4.x), max2x = Math.max(p3.x, p4.x);
+      const min2y = Math.min(p3.y, p4.y), max2y = Math.max(p3.y, p4.y);
+      if (max1x < min2x || max2x < min1x || max1y < min2y || max2y < min1y) return false;
+      const c1 = ccw(p1, p2, p3);
+      const c2 = ccw(p1, p2, p4);
+      const c3 = ccw(p3, p4, p1);
+      const c4 = ccw(p3, p4, p2);
+      return ((c1 > 0 && c2 < 0) || (c1 < 0 && c2 > 0)) && ((c3 > 0 && c4 < 0) || (c3 < 0 && c4 > 0));
+    }
+
+    let iterations = 0;
+    while (iterations < 12) {
+      let found = false;
+      const n = pts.length;
+      for (let i = 0; i < n - 1; i++) {
+        const p1 = getP(i);
+        const p2 = getP(i + 1);
+        for (let j = i + 2; j < n - 1; j++) {
+          const p3 = getP(j);
+          const p4 = getP(j + 1);
+          if (checkIntersect(p1, p2, p3, p4)) {
+            const a = i;
+            const b = j + 1;
+            const pa = getP(a);
+            const pb = getP(b);
+            const isHookLoop = !!(hookFeature && b >= hookFeature.index - 2);
+            if (isHookLoop) {
+              for (let k = a + 1; k < b; k++) {
+                const t = (k - a) / Math.max(1, b - a);
+                setP(k, pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y));
+              }
+            } else {
+              const midK = Math.floor((a + b) * 0.5);
+              const pullW = behavior.isPieZhe ? 0.65 : 0.45;
+              const targetX = pts[midK].x + (isLeft ? 1 : -1) * pts[midK].nx * (shaftRadius * 0.25);
+              const targetY = pts[midK].y + (isLeft ? 1 : -1) * pts[midK].ny * (shaftRadius * 0.25);
+              const vx = (1.0 - pullW) * (0.5 * (pa.x + pb.x)) + pullW * targetX;
+              const vy = (1.0 - pullW) * (0.5 * (pa.y + pb.y)) + pullW * targetY;
+              for (let k = a + 1; k < b; k++) {
+                if (k <= midK) {
+                  const t = (k - a) / Math.max(1, midK - a);
+                  setP(k, pa.x + t * (vx - pa.x), pa.y + t * (vy - pa.y));
+                } else {
+                  const t = (k - midK) / Math.max(1, b - midK);
+                  setP(k, vx + t * (pb.x - vx), vy + t * (pb.y - vy));
+                }
+              }
+            }
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) break;
+      iterations++;
+    }
+  }
+
+  // Pre-progression loop collapse
+  collapsePolylineLoops(rawPts, true);
+  collapsePolylineLoops(rawPts, false);
+
   // Forward-progression enforcement pass on (lx, ly) and (rx, ry)
   for (let iter = 0; iter < 6; iter++) {
     for (let i = 0; i < numSamples; i++) {
+      const nearAcuteCorner = cornerFeatures.some(cf => cf.angle > 1.1 && (Math.abs(rawPts[i].s - cf.s) <= 2.2 || (i + 1 <= numSamples && Math.abs(rawPts[i + 1].s - cf.s) <= 2.2)));
+      if (nearAcuteCorner) continue;
+
       const dLx = rawPts[i + 1].lx - rawPts[i].lx;
       const dLy = rawPts[i + 1].ly - rawPts[i].ly;
       const dotL = dLx * rawPts[i].tx + dLy * rawPts[i].ty;
@@ -1376,6 +1512,9 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
 
     for (let i = 1; i < numSamples; i++) {
+      const nearAcuteCorner = cornerFeatures.some(cf => cf.angle > 1.1 && (Math.abs(rawPts[i].s - cf.s) <= 2.2 || (i + 1 <= numSamples && Math.abs(rawPts[i + 1].s - cf.s) <= 2.2)));
+      if (nearAcuteCorner) continue;
+
       const sLx = 0.2 * rawPts[i - 1].lx + 0.6 * rawPts[i].lx + 0.2 * rawPts[i + 1].lx;
       const sLy = 0.2 * rawPts[i - 1].ly + 0.6 * rawPts[i].ly + 0.2 * rawPts[i + 1].ly;
       const pDotL = (sLx - rawPts[i - 1].lx) * rawPts[i - 1].tx + (sLy - rawPts[i - 1].ly) * rawPts[i - 1].ty;
@@ -1396,92 +1535,67 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
-  // Self-intersection loop collapsing
-  function collapsePolylineLoops(pts, isLeft) {
-    const getP = (idx) => isLeft ? { x: pts[idx].lx, y: pts[idx].ly } : { x: pts[idx].rx, y: pts[idx].ry };
-    const setP = (idx, x, y) => {
-      if (isLeft) {
-        pts[idx].lx = x;
-        pts[idx].ly = y;
-      } else {
-        pts[idx].rx = x;
-        pts[idx].ry = y;
-      }
-    };
-    function ccw(p1, p2, p3) {
-      return (p3.y - p1.y) * (p2.x - p1.x) - (p2.y - p1.y) * (p3.x - p1.x);
-    }
-    function checkIntersect(p1, p2, p3, p4) {
-      const min1x = Math.min(p1.x, p2.x), max1x = Math.max(p1.x, p2.x);
-      const min1y = Math.min(p1.y, p2.y), max1y = Math.max(p1.y, p2.y);
-      const min2x = Math.min(p3.x, p4.x), max2x = Math.max(p3.x, p4.x);
-      const min2y = Math.min(p3.y, p4.y), max2y = Math.max(p3.y, p4.y);
-      if (max1x < min2x || max2x < min1x || max1y < min2y || max2y < min1y) return false;
-      const c1 = ccw(p1, p2, p3);
-      const c2 = ccw(p1, p2, p4);
-      const c3 = ccw(p3, p4, p1);
-      const c4 = ccw(p3, p4, p2);
-      return ((c1 > 0 && c2 < 0) || (c1 < 0 && c2 > 0)) && ((c3 > 0 && c4 < 0) || (c3 < 0 && c4 > 0));
-    }
-
-    let iterations = 0;
-    while (iterations < 6) {
-      let found = false;
-      const n = pts.length;
-      for (let i = 0; i < n - 1; i++) {
-        const p1 = getP(i);
-        const p2 = getP(i + 1);
-        for (let j = i + 2; j < n - 1; j++) {
-          const p3 = getP(j);
-          const p4 = getP(j + 1);
-          if (checkIntersect(p1, p2, p3, p4)) {
-            const a = i;
-            const b = j + 1;
-            const pa = getP(a);
-            const pb = getP(b);
-            for (let k = a + 1; k < b; k++) {
-              const t = (k - a) / (b - a);
-              setP(k, pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y));
-            }
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-      }
-      if (!found) break;
-      iterations++;
-    }
-  }
-
+  // Post-progression loop collapse
   collapsePolylineLoops(rawPts, true);
   collapsePolylineLoops(rawPts, false);
 
-  for (let i = 0; i < numSamples; i++) {
-    const dLx = rawPts[i + 1].lx - rawPts[i].lx;
-    const dLy = rawPts[i + 1].ly - rawPts[i].ly;
-    const dotL = dLx * rawPts[i].tx + dLy * rawPts[i].ty;
-    if (dotL < -0.15) {
-      rawPts[i + 1].lx += rawPts[i].tx * (-0.10 - dotL);
-      rawPts[i + 1].ly += rawPts[i].ty * (-0.10 - dotL);
+  if (hookFeature) {
+    const hStart = hookFeature.index;
+    const hEnd = numSamples;
+    if (hEnd - hStart >= 4) {
+      const startW = Math.hypot(rawPts[hStart].rx - rawPts[hStart].lx, rawPts[hStart].ry - rawPts[hStart].ly);
+      const endW = Math.hypot(rawPts[hEnd].rx - rawPts[hEnd].lx, rawPts[hEnd].ry - rawPts[hEnd].ly);
+      for (let i = hStart + 1; i < hEnd; i++) {
+        const t = (i - hStart) / (hEnd - hStart);
+        const linearW = startW * (1.0 - t) + endW * t;
+        const curW = Math.hypot(rawPts[i].rx - rawPts[i].lx, rawPts[i].ry - rawPts[i].ly);
+        if (curW > linearW * 1.02 && curW > 1e-4) {
+          const targetW = 0.25 * curW + 0.75 * linearW;
+          const scaleW = targetW / curW;
+          const mx = 0.5 * (rawPts[i].lx + rawPts[i].rx);
+          const my = 0.5 * (rawPts[i].ly + rawPts[i].ry);
+          rawPts[i].lx = mx + (rawPts[i].lx - mx) * scaleW;
+          rawPts[i].ly = my + (rawPts[i].ly - my) * scaleW;
+          rawPts[i].rx = mx + (rawPts[i].rx - mx) * scaleW;
+          rawPts[i].ry = my + (rawPts[i].ry - my) * scaleW;
+        }
+      }
     }
-    const dRx = rawPts[i + 1].rx - rawPts[i].rx;
-    const dRy = rawPts[i + 1].ry - rawPts[i].ry;
-    const dotR = dRx * rawPts[i].tx + dRy * rawPts[i].ty;
-    if (dotR < -0.15) {
-      rawPts[i + 1].rx += rawPts[i].tx * (-0.10 - dotR);
-      rawPts[i + 1].ry += rawPts[i].ty * (-0.10 - dotR);
+  }
+  collapsePolylineLoops(rawPts, true);
+  collapsePolylineLoops(rawPts, false);
+
+  const cleanLimit = hookFeature ? Math.max(4, hookFeature.index - 3) : numSamples;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < cleanLimit; i++) {
+      const nearSharp = cornerFeatures.some(cf => cf.angle > 0.45 && (Math.abs(rawPts[i].s - cf.s) <= 4.5 || (i + 1 <= numSamples && Math.abs(rawPts[i + 1].s - cf.s) <= 4.5)));
+      if (nearSharp) continue;
+
+      const dLx = rawPts[i + 1].lx - rawPts[i].lx;
+      const dLy = rawPts[i + 1].ly - rawPts[i].ly;
+      const dotL = dLx * rawPts[i].tx + dLy * rawPts[i].ty;
+      if (dotL < -0.08) {
+        rawPts[i + 1].lx += rawPts[i].tx * (-0.05 - dotL);
+        rawPts[i + 1].ly += rawPts[i].ty * (-0.05 - dotL);
+      }
+      const dRx = rawPts[i + 1].rx - rawPts[i].rx;
+      const dRy = rawPts[i + 1].ry - rawPts[i].ry;
+      const dotR = dRx * rawPts[i].tx + dRy * rawPts[i].ty;
+      if (dotR < -0.08) {
+        rawPts[i + 1].rx += rawPts[i].tx * (-0.05 - dotR);
+        rawPts[i + 1].ry += rawPts[i].ty * (-0.05 - dotR);
+      }
     }
   }
 
   // Expanded corner features for geometry and evaluation
   const evalCornerFeatures = [...cornerFeatures];
   // Also detect short-stroke flick corner like 心 s3 (origLen < 25)
-  if (cornerFeatures.length === 0) {
+  if (cornerFeatures.length === 0 && !hookFeature && !behavior.isCrownDot) {
     let bestA = 0;
     let bestI = -1;
     for (let i = 2; i < numSamples - 2; i++) {
-      if (rawPts[i].turnAngle > bestA && rawPts[i].turnAngle > 0.45) {
+      if (rawPts[i].turnAngle > bestA && rawPts[i].turnAngle > 0.36) {
         bestA = rawPts[i].turnAngle;
         bestI = i;
       }
@@ -1509,7 +1623,8 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     features,
     hookFeature,
     cornerFeatures: evalCornerFeatures,
-    boxSize
+    boxSize,
+    sweepStartU: 0.43
   };
 }
 
@@ -1554,15 +1669,16 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
     const tipX = (lastL.x + lastR.x) * 0.5 + endPt.tx * tipExt;
     const tipY = (lastL.y + lastR.y) * 0.5 + endPt.ty * tipExt;
     d += " L " + numFmt(tipX) + " " + numFmt(tipY) + " L " + numFmt(lastR.x) + " " + numFmt(lastR.y);
-  } else if (compiled.behavior.isDot) {
+  } else if (compiled.behavior.isDot || compiled.behavior.isCrownDot) {
     const endMidX = (lastL.x + lastR.x) * 0.5;
     const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.48;
+    const capMult = compiled.behavior.isCrownDot ? 0.16 : 0.20;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * capMult;
     d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
   } else {
     const endMidX = (lastL.x + lastR.x) * 0.5;
     const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.35;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.24;
     d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
   }
 
@@ -1573,7 +1689,7 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
   const firstL = smoothL[0];
   const firstR = smoothR[0];
   const p0 = pts[0];
-  const entryRatio = compiled.behavior.isDot ? 0.32 : 0.25;
+  const entryRatio = (compiled.behavior.isDot || compiled.behavior.isCrownDot) ? 0.18 : 0.20;
   const entrySpan = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y) * entryRatio;
   const cp1x = firstR.x - p0.tx * (entrySpan * 0.4);
   const cp1y = firstR.y - p0.ty * (entrySpan * 0.4);
@@ -1890,10 +2006,11 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
     const tipY = (lastL.y + lastR.y) * 0.5 + endPt.ty * tipExt;
     ctx.lineTo(tipX, tipY);
     ctx.lineTo(lastR.x, lastR.y);
-  } else if (compiled.behavior.isDot) {
+  } else if (compiled.behavior.isDot || compiled.behavior.isCrownDot) {
     const endMidX = (lastL.x + lastR.x) * 0.5;
     const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.48;
+    const capMult = compiled.behavior.isCrownDot ? 0.16 : 0.20;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * capMult;
     ctx.quadraticCurveTo(
       endMidX + endPt.tx * capSpan,
       endMidY + endPt.ty * capSpan,
@@ -1903,7 +2020,7 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
   } else {
     const endMidX = (lastL.x + lastR.x) * 0.5;
     const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.35;
+    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.24;
     ctx.quadraticCurveTo(
       endMidX + endPt.tx * capSpan,
       endMidY + endPt.ty * capSpan,
@@ -1919,7 +2036,7 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
   const firstL = smoothL[0];
   const firstR = smoothR[0];
   const p0 = pts[0];
-  const entryRatio = compiled.behavior.isDot ? 0.32 : 0.25;
+  const entryRatio = (compiled.behavior.isDot || compiled.behavior.isCrownDot) ? 0.18 : 0.20;
   const entrySpan = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y) * entryRatio;
   ctx.bezierCurveTo(
     firstR.x - p0.tx * (entrySpan * 0.4),
@@ -2149,7 +2266,7 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
   const tex = getCloudySumiTextureCanvas();
   if (tex) {
     ctx.save();
-    ctx.globalAlpha = (toneMode === "dark-sumi") ? 0.08 : 0.12;
+    ctx.globalAlpha = (toneMode === "dark-sumi") ? 0.05 : 0.06;
     const pat = ctx.createPattern(tex, "repeat");
     if (pat) {
       ctx.fillStyle = pat;
@@ -2190,8 +2307,8 @@ function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "s
     lightC0 = "rgba(42, 36, 31, 0.20)";
     lightC1 = "rgba(35, 30, 26, 0.08)";
     lightC2 = "rgba(35, 30, 26, 0)";
-    poolC0  = "rgba(4, 3, 2, 0.06)";
-    poolC1  = "rgba(4, 3, 2, 0.02)";
+    poolC0  = "rgba(4, 3, 2, 0.03)";
+    poolC1  = "rgba(4, 3, 2, 0.01)";
     poolC2  = "rgba(4, 3, 2, 0)";
   }
 
