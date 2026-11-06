@@ -2469,6 +2469,158 @@ body.audit-view {
   font-weight: 600;
 }
 
+/* 10.5 墨・宣紙物理レンダリング詳細設定パネル */
+.ink-settings-toggle-btn {
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ink-settings-toggle-btn:hover,
+.ink-settings-toggle-btn[aria-expanded="true"] {
+  border-color: var(--accent-vermilion);
+  color: var(--accent-vermilion);
+  background: var(--accent-vermilion-light);
+}
+
+.ink-physics-panel {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ink-physics-panel[hidden] {
+  display: none !important;
+}
+
+.audit-ink-panel-container {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.audit-ink-panel-container .ink-physics-panel {
+  margin-top: 14px;
+}
+
+.ink-physics-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 5px;
+}
+
+.ink-physics-panel-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.btn-ink-reset {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.btn-ink-reset:hover {
+  border-color: var(--accent-vermilion);
+  color: var(--accent-vermilion);
+}
+
+.ink-preset-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ink-preset-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.btn-ink-preset {
+  font-size: 0.69rem;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.btn-ink-preset:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.btn-ink-preset.active {
+  background: var(--accent-vermilion);
+  border-color: var(--accent-vermilion);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ink-slider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 6px 10px;
+}
+
+.ink-slider-item {
+  display: grid;
+  grid-template-columns: 1fr 74px 30px;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.69rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ink-slider-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.ink-physics-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent-vermilion);
+  cursor: pointer;
+  height: 14px;
+}
+
+.ink-slider-val {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-primary);
+  text-align: right;
+  font-weight: 600;
+}
+
 /* 11. レスポンシブ対応 */
 @media (max-width: 900px) {
   html, body {

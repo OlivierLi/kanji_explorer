@@ -85,6 +85,16 @@ THRESHOLDS = {
     "m11_min_char_width_ratio": 0.72,
     "m12_max_tome_ratio": 1.30,
     "m12_max_corner_bloat_ratio": 1.28,
+    "i1_min_interior_darkness_std": 5.5,
+    "i1_min_interior_alpha_std": 4.5,
+    "i2_min_valley_ridge_contrast": 7.0,
+    "i3_min_coffee_ring_rim_delta": 4.5,
+    "i4_min_nijimi_fringe_ratio": 0.25,
+    "i4_min_nijimi_valley_anisotropy": 0.35,
+    "i5_min_glue_warmth_shift": 1.8,
+    "i6_min_bristle_striation_rms": 1.1,
+    "i7_min_dwell_pool_enrichment": 3.5,
+    "i8_min_crossing_layer_darkening": 10.0,
 }
 
 
@@ -358,6 +368,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
   strokeCanvas.width = 792;
   strokeCanvas.height = 792;
   const strokeCtx = strokeCanvas.getContext("2d");
+  const paperSub = getXuanPaperSubstrate(792, 792);
 
   try {
     // Master execution for each character
@@ -383,12 +394,14 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
     // Test full character canvas setup
     let fullRenderSuccess = false;
     let fullInkPixels = 0;
+    let fullImgDataArr = null;
     try {
       setupCalligraphySumiCanvas(targetElement, svgElem, strokeEntries);
       const fullCanvas = targetElement.querySelector("canvas.calligraphy-sumi-canvas");
       if (fullCanvas) {
         const fullCtx = fullCanvas.getContext("2d");
         const fullImg = fullCtx.getImageData(0, 0, 792, 792);
+        fullImgDataArr = fullImg.data;
         for (let i = 3; i < fullImg.data.length; i += 4) {
           if (fullImg.data[i] >= 32) fullInkPixels++;
         }
@@ -1166,6 +1179,213 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         m12CornerBloatRatio = maxCornerW / Math.max(1.0, shaftDiam);
       }
 
+      // -----------------------------------------------------------------------
+      // Ink & Paper Physics Quality Metrics I1 - I7 (Measured from Canvas Pixels)
+      // -----------------------------------------------------------------------
+      let intCount = 0;
+      let sumA = 0.0, sumA2 = 0.0;
+      let sumD = 0.0, sumD2 = 0.0;
+      let valleyDarkSum = 0.0, valleyCount = 0;
+      let ridgeDarkSum = 0.0, ridgeCount = 0;
+      let rimDarkSum = 0.0, rimCount = 0;
+      let troughDarkSum = 0.0, troughCount = 0;
+      let coreDarkSum = 0.0, coreCount = 0;
+      let haloTotalCount = 0, haloBleedCount = 0;
+      let haloValleyAlphaSum = 0.0, haloValleyCount = 0;
+      let haloRidgeAlphaSum = 0.0, haloRidgeCount = 0;
+      let thinWarmSum = 0.0, thinWarmCount = 0;
+      let thickWarmSum = 0.0, thickWarmCount = 0;
+      const dwellDarkSamples = [];
+      const shaftDarkSamples = [];
+
+      const yStart = Math.max(5, strokeBbox.minY);
+      const yEnd = Math.min(786, strokeBbox.maxY);
+      const xStart = Math.max(5, strokeBbox.minX);
+      const xEnd = Math.min(786, strokeBbox.maxX);
+
+      for (let py = yStart; py <= yEnd; py++) {
+        const rowOff = py * 792;
+        for (let px = xStart; px <= xEnd; px++) {
+          const gIdx = rowOff + px;
+          const pOff = gIdx * 4;
+          const a = imgRaw[pOff + 3];
+          const aU1 = imgRaw[((py - 1) * 792 + px) * 4 + 3];
+          const aD1 = imgRaw[((py + 1) * 792 + px) * 4 + 3];
+          const aL1 = imgRaw[(rowOff + px - 1) * 4 + 3];
+          const aR1 = imgRaw[(rowOff + px + 1) * 4 + 3];
+          const aU2 = imgRaw[((py - 2) * 792 + px) * 4 + 3];
+          const aD2 = imgRaw[((py + 2) * 792 + px) * 4 + 3];
+          const aL2 = imgRaw[(rowOff + px - 2) * 4 + 3];
+          const aR2 = imgRaw[(rowOff + px + 2) * 4 + 3];
+          const minN1 = Math.min(aU1, aD1, aL1, aR1);
+          const maxN2 = Math.max(aU1, aD1, aL1, aR1, aU2, aD2, aL2, aR2);
+
+          const hVal = paperSub.height[gIdx];
+          const gZero = paperSub.zeroB5Grain[gIdx];
+
+          if (a < 30) {
+            if (maxN2 >= 80) {
+              haloTotalCount++;
+              if (a > 0) haloBleedCount++;
+              if (hVal < 0.48) {
+                haloValleyAlphaSum += a;
+                haloValleyCount++;
+              } else if (hVal > 0.52) {
+                haloRidgeAlphaSum += a;
+                haloRidgeCount++;
+              }
+            }
+            continue;
+          }
+
+          if (a >= 115 && minN1 >= 80) {
+            const r = imgRaw[pOff];
+            const g = imgRaw[pOff + 1];
+            const b = imgRaw[pOff + 2];
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            const dark = (a / 255.0) * (255.0 - lum);
+
+            intCount++;
+            sumA += a;
+            sumA2 += a * a;
+            sumD += dark;
+            sumD2 += dark * dark;
+
+            if (gZero < -0.22) {
+              valleyDarkSum += dark;
+              valleyCount++;
+            } else if (gZero > 0.22) {
+              ridgeDarkSum += dark;
+              ridgeCount++;
+            }
+
+            const aU3 = imgRaw[((py - 3) * 792 + px) * 4 + 3];
+            const aD3 = imgRaw[((py + 3) * 792 + px) * 4 + 3];
+            const aL3 = imgRaw[(rowOff + px - 3) * 4 + 3];
+            const aR3 = imgRaw[(rowOff + px + 3) * 4 + 3];
+            const minN23 = Math.min(aU2, aD2, aL2, aR2, aU3, aD3, aL3, aR3);
+            const aU5 = imgRaw[((py - 5) * 792 + px) * 4 + 3];
+            const aD5 = imgRaw[((py + 5) * 792 + px) * 4 + 3];
+            const aL5 = imgRaw[(rowOff + px - 5) * 4 + 3];
+            const aR5 = imgRaw[(rowOff + px + 5) * 4 + 3];
+            const minN5 = Math.min(aU5, aD5, aL5, aR5);
+
+            if (minN23 < 60) {
+              rimDarkSum += dark;
+              rimCount++;
+            } else {
+              coreDarkSum += dark;
+              coreCount++;
+              if (minN23 >= 100 && minN5 < 80) {
+                troughDarkSum += dark;
+                troughCount++;
+              }
+            }
+
+            const wRgb = r - b;
+            if (a <= 188) {
+              thinWarmSum += wRgb;
+              thinWarmCount++;
+            } else if (a >= 202) {
+              thickWarmSum += wRgb;
+              thickWarmCount++;
+            }
+
+            if (intCount % 3 === 0) {
+              // Associate pixel with nearest sample u for dwell vs. mid-shaft comparison
+              let bestDistSq = Infinity;
+              let bestIdx = 0;
+              for (let k = 0; k < numPts; k += 2) {
+                const dx = px - pts[k].x;
+                const dy = py - pts[k].y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestDistSq) {
+                  bestDistSq = d2;
+                  bestIdx = k;
+                }
+              }
+              const sp = pts[bestIdx];
+              let inDwell = (sp.u <= 0.16) || (!isTapered && sp.u >= 0.82) || (beh.isRightNa && sp.u >= 0.60 && sp.u <= 0.86);
+              if (!inDwell && hf && Math.abs(sp.s - hf.s) <= 8.0) inDwell = true;
+              if (!inDwell) {
+                for (const cf of genuineCorners) {
+                  if (Math.abs(sp.s - cf.s) <= 6.5) {
+                    inDwell = true;
+                    break;
+                  }
+                }
+              }
+              if (inDwell) {
+                dwellDarkSamples.push(dark);
+              } else if (sp.u >= 0.24 && sp.u <= 0.64) {
+                shaftDarkSamples.push(dark);
+              }
+            }
+          }
+        }
+      }
+
+      const meanIntA = intCount > 0 ? (sumA / intCount) : 0.0;
+      const i1InteriorAlphaStd = intCount > 1 ? Math.sqrt(Math.max(0.0, sumA2 / intCount - meanIntA * meanIntA)) : 0.0;
+      const meanIntD = intCount > 0 ? (sumD / intCount) : 0.0;
+      const i1InteriorDarknessStd = intCount > 1 ? Math.sqrt(Math.max(0.0, sumD2 / intCount - meanIntD * meanIntD)) : 0.0;
+
+      const i2ValleyRidgeContrast = (valleyCount > 0 && ridgeCount > 0)
+        ? ((valleyDarkSum / valleyCount) - (ridgeDarkSum / ridgeCount))
+        : 0.0;
+
+      const refTroughMean = troughCount >= 8 ? (troughDarkSum / troughCount) : (coreDarkSum / Math.max(1, coreCount));
+      const i3CoffeeRingRimDelta = rimCount > 0 ? ((rimDarkSum / rimCount) - refTroughMean) : 0.0;
+
+      const i4NijimiFringeRatio = haloTotalCount > 0 ? (haloBleedCount / haloTotalCount) : 0.0;
+      const i4NijimiValleyAnisotropy = (haloValleyCount > 0 && haloRidgeCount > 0)
+        ? ((haloValleyAlphaSum / haloValleyCount) - (haloRidgeAlphaSum / haloRidgeCount))
+        : 0.0;
+
+      const i5GlueWarmthShift = (thinWarmCount > 0 && thickWarmCount > 0)
+        ? ((thinWarmSum / thinWarmCount) - (thickWarmSum / thickWarmCount))
+        : 0.0;
+
+      // I6: Skeletal Bristle-Track Transverse Striation RMS
+      let sumTransDiffSq = 0.0;
+      let countTransDiff = 0;
+      for (let i = 2; i < stopIdx - 1; i += 2) {
+        const p = pts[i];
+        const halfW = Math.max(3.5, 0.46 * contourW[i] - 1.2);
+        for (let s = -halfW; s <= halfW - 1.0; s += 1.0) {
+          if (Math.abs(s) < 2.6 && Math.abs(s + 1.0) < 2.6) continue;
+          const qx1 = Math.round(p.x + p.nx * s);
+          const qy1 = Math.round(p.y + p.ny * s);
+          const qx2 = Math.round(p.x + p.nx * (s + 1.0));
+          const qy2 = Math.round(p.y + p.ny * (s + 1.0));
+          if (qx1 < 0 || qx1 >= 792 || qy1 < 0 || qy1 >= 792 || qx2 < 0 || qx2 >= 792 || qy2 < 0 || qy2 >= 792) continue;
+          const idx1 = (qy1 * 792 + qx1) * 4;
+          const idx2 = (qy2 * 792 + qx2) * 4;
+          const a1 = imgRaw[idx1 + 3], a2 = imgRaw[idx2 + 3];
+          if (a1 >= 120 && a2 >= 120) {
+            const lum1 = 0.299 * imgRaw[idx1] + 0.587 * imgRaw[idx1 + 1] + 0.114 * imgRaw[idx1 + 2];
+            const lum2 = 0.299 * imgRaw[idx2] + 0.587 * imgRaw[idx2 + 1] + 0.114 * imgRaw[idx2 + 2];
+            const d1 = (a1 / 255.0) * (255.0 - lum1);
+            const d2 = (a2 / 255.0) * (255.0 - lum2);
+            const diff = d2 - d1;
+            sumTransDiffSq += diff * diff;
+            countTransDiff++;
+          }
+        }
+      }
+      const i6BristleStriationRms = countTransDiff > 0 ? Math.sqrt(sumTransDiffSq / countTransDiff) : 0.0;
+
+      // I7: Calligraphic Dwell & Pause Pooling Enrichment (80th percentile dwell vs. median mid-shaft)
+      dwellDarkSamples.sort((a, b) => a - b);
+      shaftDarkSamples.sort((a, b) => a - b);
+      const dwellP80 = dwellDarkSamples.length > 0
+        ? dwellDarkSamples[Math.min(dwellDarkSamples.length - 1, Math.floor(dwellDarkSamples.length * 0.80))]
+        : meanIntD;
+      const shaftP50 = shaftDarkSamples.length > 0
+        ? shaftDarkSamples[Math.floor(shaftDarkSamples.length * 0.50)]
+        : refTroughMean;
+      const i7DwellPoolEnrichment = dwellP80 - shaftP50;
+
       // Package stroke evaluation
       const strokeEvalObj = {
         strokeIndex: sIdx + 1,
@@ -1177,6 +1397,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         isTapered,
         isDot: !!beh.isDot,
         isCrownDot: !!beh.isCrownDot,
+        hasCrossing: false,
         m1_retrograde_steps: retrogradeSteps,
         m1_min_edge_dot_tangent: Number(minEdgeDotTangent.toFixed(3)),
         m1_min_edge_unit_dot_tangent: Number(minEdgeUnitDotTangent.toFixed(3)),
@@ -1209,6 +1430,16 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         m11_char_width_ratio: 1.0,
         m12_tome_ratio: Number(m12TomeRatio.toFixed(2)),
         m12_corner_bloat_ratio: Number(m12CornerBloatRatio.toFixed(2)),
+        i1_interior_darkness_std: Number(i1InteriorDarknessStd.toFixed(2)),
+        i1_interior_alpha_std: Number(i1InteriorAlphaStd.toFixed(2)),
+        i2_valley_ridge_contrast: Number(i2ValleyRidgeContrast.toFixed(2)),
+        i3_coffee_ring_rim_delta: Number(i3CoffeeRingRimDelta.toFixed(2)),
+        i4_nijimi_fringe_ratio: Number(i4NijimiFringeRatio.toFixed(3)),
+        i4_nijimi_valley_anisotropy: Number(i4NijimiValleyAnisotropy.toFixed(2)),
+        i5_glue_warmth_shift: Number(i5GlueWarmthShift.toFixed(2)),
+        i6_bristle_striation_rms: Number(i6BristleStriationRms.toFixed(2)),
+        i7_dwell_pool_enrichment: Number(i7DwellPoolEnrichment.toFixed(2)),
+        i8_crossing_layer_darkening: 0.0,
       };
 
       strokeEvals.push(strokeEvalObj);
@@ -1218,6 +1449,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         contourW,
         origLen: compiled.origLen || 0,
         meanW,
+        meanIntD,
         isRisingTi: !!beh.isRisingTi,
         isDot: !!beh.isDot,
         isTapered,
@@ -1226,7 +1458,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
     }
 
     // -------------------------------------------------------------------------
-    // Metric 11: Conceptual Width Consistency Across Crossing & Character Strokes
+    // Metric 11 & I8: Crossing Width Consistency & Multi-Stroke KM Layering
     // -------------------------------------------------------------------------
     for (let a = 0; a < compiledStrokesInfo.length; a++) {
       const sA = compiledStrokesInfo[a];
@@ -1260,6 +1492,37 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
                 const crossWRatio = Math.max(wA, wB) / Math.max(1.0, Math.min(wA, wB));
                 sA.evalObj.m11_crossing_width_ratio = Math.max(sA.evalObj.m11_crossing_width_ratio, crossWRatio);
                 sB.evalObj.m11_crossing_width_ratio = Math.max(sB.evalObj.m11_crossing_width_ratio, crossWRatio);
+              }
+
+              // I8: Multi-stroke Kubelka-Munk optical glazing darkening at crossing
+              if (fullImgDataArr) {
+                const cx = Math.round(0.25 * (pA1.x + pA2.x + pB1.x + pB2.x));
+                const cy = Math.round(0.25 * (pA1.y + pA2.y + pB1.y + pB2.y));
+                let crossDarkSum = 0.0, crossCnt = 0;
+                for (let dy = -2; dy <= 2; dy++) {
+                  const qy = cy + dy;
+                  if (qy < 0 || qy >= 792) continue;
+                  for (let dx = -2; dx <= 2; dx++) {
+                    const qx = cx + dx;
+                    if (qx < 0 || qx >= 792) continue;
+                    const cOff = (qy * 792 + qx) * 4;
+                    const ca = fullImgDataArr[cOff + 3];
+                    if (ca >= 200) {
+                      const clum = 0.299 * fullImgDataArr[cOff] + 0.587 * fullImgDataArr[cOff + 1] + 0.114 * fullImgDataArr[cOff + 2];
+                      crossDarkSum += (ca / 255.0) * (255.0 - clum);
+                      crossCnt++;
+                    }
+                  }
+                }
+                if (crossCnt >= 4) {
+                  const crossDarkMean = crossDarkSum / crossCnt;
+                  const singleAvg = 0.5 * (sA.meanIntD + sB.meanIntD);
+                  const deltaCross = crossDarkMean - singleAvg;
+                  sA.evalObj.hasCrossing = true;
+                  sB.evalObj.hasCrossing = true;
+                  sA.evalObj.i8_crossing_layer_darkening = Math.max(sA.evalObj.i8_crossing_layer_darkening, Number(deltaCross.toFixed(2)));
+                  sB.evalObj.i8_crossing_layer_darkening = Math.max(sB.evalObj.i8_crossing_layer_darkening, Number(deltaCross.toFixed(2)));
+                }
               }
             }
           }
@@ -1311,7 +1574,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 """
 
     return f"""<!DOCTYPE html>
-<html>
+<html data-theme="light">
 <head>
   <meta charset="utf-8">
   <title>Brushwork Canvas Evaluator</title>
@@ -1370,8 +1633,41 @@ def _evaluate_batch_worker(payload: tuple[dict[str, list[dict[str, Any]]], str])
     return run_headless_evaluator(batch_html)
 
 
+def evaluate_ink_physics_defects(stroke: dict[str, Any]) -> dict[str, bool]:
+    """Checks whether a stroke violates physical ink & Xuan paper quality thresholds I1-I8."""
+    return {
+        "I1_km_transmittance": (
+            stroke.get("i1_interior_darkness_std", 0.0) < THRESHOLDS["i1_min_interior_darkness_std"]
+            or stroke.get("i1_interior_alpha_std", 0.0) < THRESHOLDS["i1_min_interior_alpha_std"]
+        ),
+        "I2_xuan_valley_granulation": (
+            stroke.get("i2_valley_ridge_contrast", 0.0) < THRESHOLDS["i2_min_valley_ridge_contrast"]
+        ),
+        "I3_coffee_ring_rim": (
+            stroke.get("i3_coffee_ring_rim_delta", 0.0) < THRESHOLDS["i3_min_coffee_ring_rim_delta"]
+        ),
+        "I4_lbm_nijimi_dispersion": (
+            stroke.get("i4_nijimi_fringe_ratio", 0.0) < THRESHOLDS["i4_min_nijimi_fringe_ratio"]
+            or stroke.get("i4_nijimi_valley_anisotropy", 0.0) < THRESHOLDS["i4_min_nijimi_valley_anisotropy"]
+        ),
+        "I5_colloidal_glue_warmth": (
+            stroke.get("i5_glue_warmth_shift", 0.0) < THRESHOLDS["i5_min_glue_warmth_shift"]
+        ),
+        "I6_bristle_striations": (
+            stroke.get("i6_bristle_striation_rms", 0.0) < THRESHOLDS["i6_min_bristle_striation_rms"]
+        ),
+        "I7_dwell_pooling": (
+            stroke.get("i7_dwell_pool_enrichment", 0.0) < THRESHOLDS["i7_min_dwell_pool_enrichment"]
+        ),
+        "I8_multi_stroke_km_glaze": (
+            stroke.get("hasCrossing", False)
+            and stroke.get("i8_crossing_layer_darkening", 0.0) < THRESHOLDS["i8_min_crossing_layer_darkening"]
+        ),
+    }
+
+
 def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
-    """Checks whether a stroke violates thresholds across metrics M1-M12."""
+    """Checks whether a stroke violates thresholds across brushwork metrics M1-M12 and ink physics metrics I1-I8."""
     defects = {
         "M1_folds": (
             stroke["m1_retrograde_steps"] >= THRESHOLDS["m1_retrograde_steps"]
@@ -1432,6 +1728,8 @@ def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
             or stroke["m12_corner_bloat_ratio"] > THRESHOLDS["m12_max_corner_bloat_ratio"]
         ),
     }
+    if "i1_interior_darkness_std" in stroke:
+        defects.update(evaluate_ink_physics_defects(stroke))
     return defects
 
 
@@ -1459,9 +1757,18 @@ def print_evaluation_summary(
         "M10_short_round": 0,
         "M11_width_mismatch": 0,
         "M12_terminal_or_corner_bloat": 0,
+        "I1_km_transmittance": 0,
+        "I2_xuan_valley_granulation": 0,
+        "I3_coffee_ring_rim": 0,
+        "I4_lbm_nijimi_dispersion": 0,
+        "I5_colloidal_glue_warmth": 0,
+        "I6_bristle_striations": 0,
+        "I7_dwell_pooling": 0,
+        "I8_multi_stroke_km_glaze": 0,
     }
     hook_strokes_total = 0
     tapered_strokes_total = 0
+    crossing_strokes_total = 0
     defective_strokes: list[dict[str, Any]] = []
 
     filter_defects_only = only_defects or (len(results) > 50)
@@ -1503,6 +1810,22 @@ def print_evaluation_summary(
                     details.append(f"M11(cross_w={s['m11_crossing_width_ratio']:.2f}, cross_mean={s['m11_crossing_mean_ratio']:.2f}, char_w={s['m11_char_width_ratio']:.2f})")
                 if defects["M12_terminal_or_corner_bloat"]:
                     details.append(f"M12(tome={s['m12_tome_ratio']:.2f}, corner={s['m12_corner_bloat_ratio']:.2f})")
+                if defects.get("I1_km_transmittance"):
+                    details.append(f"I1(dark_std={s.get('i1_interior_darkness_std', 0):.2f}, alpha_std={s.get('i1_interior_alpha_std', 0):.2f})")
+                if defects.get("I2_xuan_valley_granulation"):
+                    details.append(f"I2(valley_ridge={s.get('i2_valley_ridge_contrast', 0):.2f})")
+                if defects.get("I3_coffee_ring_rim"):
+                    details.append(f"I3(rim_delta={s.get('i3_coffee_ring_rim_delta', 0):.2f})")
+                if defects.get("I4_lbm_nijimi_dispersion"):
+                    details.append(f"I4(fringe={s.get('i4_nijimi_fringe_ratio', 0):.2f}, aniso={s.get('i4_nijimi_valley_anisotropy', 0):.2f})")
+                if defects.get("I5_colloidal_glue_warmth"):
+                    details.append(f"I5(warmth={s.get('i5_glue_warmth_shift', 0):.2f})")
+                if defects.get("I6_bristle_striations"):
+                    details.append(f"I6(striation_rms={s.get('i6_bristle_striation_rms', 0):.2f})")
+                if defects.get("I7_dwell_pooling"):
+                    details.append(f"I7(dwell_pool={s.get('i7_dwell_pool_enrichment', 0):.2f})")
+                if defects.get("I8_multi_stroke_km_glaze"):
+                    details.append(f"I8(cross_dark={s.get('i8_crossing_layer_darkening', 0):.2f})")
                 defective_strokes.append({
                     "char": char,
                     "strokeIndex": s["strokeIndex"],
@@ -1512,12 +1835,14 @@ def print_evaluation_summary(
                 })
 
             for k, is_def in defects.items():
-                if is_def:
+                if is_def and k in defect_counts:
                     defect_counts[k] += 1
             if s["hasHook"]:
                 hook_strokes_total += 1
             if s.get("isTapered"):
                 tapered_strokes_total += 1
+            if s.get("hasCrossing"):
+                crossing_strokes_total += 1
 
             active_defects = [k.split("_")[0] for k, v in defects.items() if v]
             defect_str = ",".join(active_defects) if active_defects else "NONE"
@@ -1592,6 +1917,14 @@ def print_evaluation_summary(
         ("M10: Short-Stroke & Dot Elongation / Anti-Roundness", defect_counts["M10_short_round"], total_strokes_all),
         ("M11: Width Consistency Across Crossing & Character Strokes", defect_counts["M11_width_mismatch"], total_strokes_all),
         ("M12: Terminal Tome Clubbing & Corner Webbing", defect_counts["M12_terminal_or_corner_bloat"], total_strokes_all),
+        ("I1: Kubelka-Munk Optical Transmittance & Tonal Dynamic Range", defect_counts["I1_km_transmittance"], total_strokes_all),
+        ("I2: Xuan Paper Fiber & Valley Granulation Coupling", defect_counts["I2_xuan_valley_granulation"], total_strokes_all),
+        ("I3: Contact-Line Capillary Replenishment / Coffee-Ring Rim", defect_counts["I3_coffee_ring_rim"], total_strokes_all),
+        ("I4: Anisotropic D2Q9 LBM Nijimi Dispersion & Pinning", defect_counts["I4_lbm_nijimi_dispersion"], total_strokes_all),
+        ("I5: Colloidal Soot / Animal Glue Chromatic Warmth Separation", defect_counts["I5_colloidal_glue_warmth"], total_strokes_all),
+        ("I6: Skeletal Bristle-Track Striations & Feibai Coupling", defect_counts["I6_bristle_striations"], total_strokes_all),
+        ("I7: Calligraphic Dwell & Pause Pooling Enrichment", defect_counts["I7_dwell_pooling"], total_strokes_all),
+        ("I8: Multi-Stroke Kubelka-Munk Optical Layering at Crossings", defect_counts["I8_multi_stroke_km_glaze"], crossing_strokes_total if crossing_strokes_total else 1),
     ]
 
     for label, count, denom in metric_names:

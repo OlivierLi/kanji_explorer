@@ -75,6 +75,7 @@
           <span>字形分解キャンバス</span>
         </h2>
         <div style="display: flex; gap: 6px; align-items: center;">
+          <button type="button" id="btnInkSettingsToggle" class="btn-mode ink-settings-toggle-btn" aria-expanded="false" title="墨・宣紙の物理レンダリング強度（紙目・滲み・輪郭溜まり・渇筆・膠色差）を詳細調整します">⚙ 墨・宣紙設定</button>
           <div class="display-mode-selector">
             <button type="button" id="btnModeKvg" class="btn-mode active" title="筆画表示(KanjiVGベクター)">筆画</button>
             <button type="button" id="btnModeMincho" class="btn-mode" title="印刷書体表示(明朝体)">明朝</button>
@@ -97,6 +98,63 @@
           </div>
           <div class="depth-lock-trail" id="depthLockTrail">
             <span class="depth-lock-hint">※ 第1階層の構成部品をクリックで固定展開、「選択解除」で解除</span>
+          </div>
+        </div>
+
+        <!-- 墨・宣紙物理レンダリング詳細設定パネル -->
+        <div class="ink-physics-panel" id="inkPhysicsSettingsPanel" hidden>
+          <div class="ink-physics-panel-header">
+            <span class="ink-physics-panel-title">墨・宣紙物理レンダリング設定 (LBM滲み・Kubelka-Munk光学層)</span>
+            <button type="button" class="btn-ink-reset" id="btnResetInkPhysics" title="物理パラメータを既定値に戻します">既定値に戻す</button>
+          </div>
+          <div class="ink-preset-row" id="inkPresetRow">
+            <span class="ink-preset-label">質感プリセット:</span>
+            <button type="button" class="btn-ink-preset active" data-preset="standard">標準・生宣濃墨</button>
+            <button type="button" class="btn-ink-preset" data-preset="raw_xuan">特浄皮・強滲み</button>
+            <button type="button" class="btn-ink-preset" data-preset="sized_feibai">礬水熟宣・飛白</button>
+            <button type="button" class="btn-ink-preset" data-preset="light_wash">淡墨・水暈</button>
+          </div>
+          <div class="ink-slider-grid">
+            <label class="ink-slider-item" title="青檀・楮繊維束の凹凸および竹簾目による墨粒子の谷間沈着強度">
+              <span class="ink-slider-name">宣紙繊維・簾目粒度</span>
+              <input type="range" class="ink-physics-slider" data-param="paperGrainIntensity" min="0" max="2.2" step="0.05" value="1.35">
+              <span class="ink-slider-val" data-val-for="paperGrainIntensity">1.35</span>
+            </label>
+            <label class="ink-slider-item" title="接触線ピニングと毛管補給流による筆画輪郭の濃墨縁取り（コーヒーリング効果）">
+              <span class="ink-slider-name">輪郭毛管溜まり (縁濃)</span>
+              <input type="range" class="ink-physics-slider" data-param="coffeeRingIntensity" min="0" max="2.2" step="0.05" value="1.45">
+              <span class="ink-slider-val" data-val-for="coffeeRingIntensity">1.45</span>
+            </label>
+            <label class="ink-slider-item" title="D2Q9格子ボルツマン法による宣紙繊維方向への異方性毛管滲み（にじみ）">
+              <span class="ink-slider-name">毛管滲み・水暈 (LBM)</span>
+              <input type="range" class="ink-physics-slider" data-param="nijimiIntensity" min="0" max="2.2" step="0.05" value="1.40">
+              <span class="ink-slider-val" data-val-for="nijimiIntensity">1.40</span>
+            </label>
+            <label class="ink-slider-item" title="筆毫束（毛束）の骨格条線と紙面細孔抵抗の結合による筆跡の筋目">
+              <span class="ink-slider-name">筆毫毛束条線・筋目</span>
+              <input type="range" class="ink-physics-slider" data-param="bristleStriationIntensity" min="0" max="2.2" step="0.05" value="1.35">
+              <span class="ink-slider-val" data-val-for="bristleStriationIntensity">1.35</span>
+            </label>
+            <label class="ink-slider-item" title="起筆・転折・撥ね・払い停留部での筆圧による墨溜まり（溜め）">
+              <span class="ink-slider-name">起筆・転折の墨溜まり</span>
+              <input type="range" class="ink-physics-slider" data-param="dwellPoolingIntensity" min="0" max="2.2" step="0.05" value="1.40">
+              <span class="ink-slider-val" data-val-for="dwellPoolingIntensity">1.40</span>
+            </label>
+            <label class="ink-slider-item" title="Kubelka-Munk二光束光学モデルにおける薄墨部の透過率と濃淡コントラスト">
+              <span class="ink-slider-name">光学層透過コントラスト</span>
+              <input type="range" class="ink-physics-slider" data-param="kmTransmittanceContrast" min="0.4" max="2.2" step="0.05" value="1.35">
+              <span class="ink-slider-val" data-val-for="kmTransmittanceContrast">1.35</span>
+            </label>
+            <label class="ink-slider-item" title="微細膠（にかわ）・煤コロイドと粗大煤粒子の移動度差による淡墨部の茶墨色差">
+              <span class="ink-slider-name">膠・煤コロイド暖色差</span>
+              <input type="range" class="ink-physics-slider" data-param="glueChromaticWarmth" min="0" max="2.2" step="0.05" value="1.25">
+              <span class="ink-slider-val" data-val-for="glueChromaticWarmth">1.25</span>
+            </label>
+            <label class="ink-slider-item" title="長大な左払い・右払い等の終筆部における穂先割れ・飛白（かすれ）量">
+              <span class="ink-slider-name">払いの渇筆・飛白量</span>
+              <input type="range" class="ink-physics-slider" data-param="kasureAmount" min="0" max="0.85" step="0.05" value="0.30">
+              <span class="ink-slider-val" data-val-for="kasureAmount">0.30</span>
+            </label>
           </div>
         </div>
 
