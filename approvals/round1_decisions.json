@@ -1,0 +1,30 @@
+{
+  "generated": "2026-11-06T17:18:17.935Z",
+  "note": "Variant decisions for static/app.js STROKE_VARIANTS. decision: ok | tweak | no",
+  "decisions": {
+    "ellipticalCaps": {
+      "decision": "ok",
+      "comment": ""
+    },
+    "mitreCorners": {
+      "decision": "no",
+      "comment": ""
+    },
+    "strongCefeng": {
+      "decision": "ok",
+      "comment": ""
+    },
+    "dryKasure": {
+      "decision": "tweak",
+      "comment": "Too strong on 国"
+    },
+    "anchoredEnds": {
+      "decision": "ok",
+      "comment": ""
+    },
+    "wetDryTrim": {
+      "decision": "tweak",
+      "comment": "Too subtle."
+    }
+  }
+}

@@ -2067,7 +2067,12 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     hookFeature,
     cornerFeatures: evalCornerFeatures,
     boxSize,
-    sweepStartU: 0.43,
+    sweepStartU: (function() {
+      const lastCf = evalCornerFeatures.length > 0 ? evalCornerFeatures[evalCornerFeatures.length - 1] : null;
+      const isPost = !!(lastCf && lastCf.u > 0.44);
+      return isPost ? lastCf.u : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * origLen, 24.0) / Math.max(0.1, origLen)) : 0.43);
+    })(),
+    naFootU: STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * origLen, 9.0) / Math.max(0.1, origLen) : 0.72,
     _brushCompileKey: getBrushCompileKey(SLENDER_PHYSICS)
   };
 }
@@ -2292,12 +2297,23 @@ function getKasureChannels(compiled) {
     ];
   }
 
-  if (b.isDot || b.isCrownDot || b.isRisingTi || compiled.hookFeature || !pts || pts.length < 12) return [];
+  const origLen = compiled.origLen || 0;
+  const comp = (compiled.stroke && compiled.stroke.component) ? compiled.stroke.component.trim() : '';
+
+  // dryKasure (tweaked): exclude dots, hooks, short strokes (< 55), and enclosed box components
+  if (b.isDot || b.isCrownDot || b.isRisingTi || compiled.hookFeature || !pts || pts.length < 12 || origLen < 55) return [];
+  const isEnclosure = (comp === '囗' || comp === '囲' || comp === '門' || comp === '田' || comp === '日' || comp === '目' || comp === '四');
+  if (isEnclosure || b.isConnectingVertical) return [];
+
+  const isStructuralFrame = (b.isHorizontal || b.isVertical || b.isFold);
+  if (isStructuralFrame && origLen < 68) return [];
+
   if (!compiled._dryness || compiled._dryness.length !== pts.length) {
     const sstep = (a, bb, x) => { const t = Math.max(0, Math.min(1, (x - a) / (bb - a))); return t * t * (3 - 2 * t); };
+    const wetThresh = isStructuralFrame ? 0.80 : 0.85;
     compiled._dryness = pts.map(p => {
       const wet = p.tuftWetness ?? 0.9;
-      return Math.max(0, Math.min(1, (0.88 - wet) / 0.14)) * sstep(0.5, 0.95, p.u ?? 0);
+      return Math.max(0, Math.min(1, (wetThresh - wet) / 0.12)) * sstep(0.55, 0.95, p.u ?? 0);
     });
   }
   const dry = compiled._dryness;
@@ -2305,16 +2321,17 @@ function getKasureChannels(compiled) {
   let startIdx = -1;
   for (let i = 0; i < dry.length; i++) {
     if (dry[i] > maxDry) maxDry = dry[i];
-    if (startIdx < 0 && dry[i] > 0.08) startIdx = i;
+    if (startIdx < 0 && dry[i] > 0.15) startIdx = i;
   }
-  if (maxDry < 0.12 || startIdx < 0) return [];
+  if (maxDry < 0.20 || startIdx < 0) return [];
 
   const seed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233) * 43758.5453) % 1.0;
   const jit = (k) => ((seed * (k + 3.7)) % 1.0) - 0.5;
-  const lats = maxDry > 0.7 ? [0.28 + 0.08 * jit(1), 0.50 + 0.08 * jit(2), 0.72 + 0.08 * jit(3)] : [0.36 + 0.10 * jit(1), 0.64 + 0.10 * jit(2)];
+  const lats = [0.38 + 0.08 * jit(1), 0.64 + 0.08 * jit(2)];
   const startU = pts[startIdx].u;
-  const endU = maxDry > 0.45 ? 1.0 : 0.95;
-  return lats.map((lat, j) => ({ lat, startU: Math.min(0.9, startU + 0.025 * j), endU, widthFrac: 0.11 * kScale, dry: true }));
+  const isFreeSweep = b.isSweepEnd || b.isVerticalSweep || b.isRightNa;
+  const endU = isFreeSweep && maxDry > 0.6 ? 0.98 : 0.93;
+  return lats.map((lat, j) => ({ lat, startU: Math.min(0.88, startU + 0.03 * j), endU, widthFrac: 0.055 * kScale, dry: true }));
 }
 
 /** Slit half-extent source: line width (px) and carve alpha at parameter t along a kasure channel. */
@@ -3802,10 +3819,10 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
 
       // wetDryTrim (Chu & Tai 2005 Sec. 6.1, Eq. 11): trim the footprint where phi = [low-passed wet mask] - 0.5 + r_scale * rough < 0,
       // so the silhouette follows paper-fibre roughness instead of the ideal contour
-      if (STROKE_VARIANTS.wetDryTrim && mask > 0.01 && mb < 0.97) {
-        const rough = 0.6 * fil + 0.4 * mFib;
-        const phiTrim = (mb - 0.5) + 0.26 * rough;
-        const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.15) / 0.30));
+      if (STROKE_VARIANTS.wetDryTrim && mask > 0.01 && mb < 0.98) {
+        const rough = 0.45 * fil + 0.35 * mFib + 0.20 * gZero;
+        const phiTrim = (mb - 0.48) + 0.48 * rough;
+        const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.10) / 0.20));
         finalAlpha *= tTrim * tTrim * (3.0 - 2.0 * tTrim);
       }
 

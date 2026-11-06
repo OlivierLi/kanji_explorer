@@ -969,7 +969,7 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         if (hf) {
           taperStartU = hf.u;
         } else if (beh.isRightNa) {
-          taperStartU = 0.72;
+          taperStartU = compiled.naFootU || 0.72;
         } else if (beh.isRoofHook || beh.isVerticalTi || (lastCf && lastCf.u > 0.44)) {
           taperStartU = lastCf ? lastCf.u : 0.75;
         } else if (beh.isRisingTi) {
