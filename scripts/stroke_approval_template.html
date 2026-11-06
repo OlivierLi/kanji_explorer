@@ -60,6 +60,16 @@
   #cmpLine { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff5da2; pointer-events: none; }
   h3.sec { margin: 26px 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .stat { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .tune { padding: 10px 16px 12px; border-top: 1px solid var(--line); }
+  .tune-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .tune-head .mod { color: var(--tweak); text-transform: none; letter-spacing: 0; }
+  .tune-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 6px 22px; }
+  .tune-row { display: grid; grid-template-columns: 1fr 150px 52px 22px; align-items: center; gap: 8px; font-size: 13px; }
+  .tune-row input[type=range] { width: 100%; accent-color: var(--accent); }
+  .tune-row .val { font-variant-numeric: tabular-nums; text-align: right; }
+  .tune-row .val.changed { color: var(--tweak); font-weight: 600; }
+  .tune-row button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0; font-size: 14px; }
+  .tune-row button:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -77,8 +87,9 @@
 <main>
   <div class="note">
     <b>How to review.</b> Each card renders the baseline (all variants off) next to the variant for the selected character.
-    Click any image to open a swipe-compare with zoom. Choose <b>Approve</b>, <b>Reject</b> or <b>Tweak</b> (with a comment saying what to change),
-    then use <b>Export decisions</b> at the bottom. <code>python3 scripts/apply_stroke_approvals.py decisions.json</code> switches approved variants on by default.<br>
+    Click any image to open a swipe-compare with zoom. Use the <b>Tune</b> sliders under a card to adjust that variant's look (the variant
+    image re-renders as you drag; slider values are saved with your judgment). Choose <b>Approve</b>, <b>Reject</b> or <b>Tweak</b> (with a comment saying what to change),
+    then use <b>Export decisions</b> at the bottom. <code>python3 scripts/apply_stroke_approvals.py decisions.json</code> switches approved variants on by default and writes their slider values into <code>static/app.js</code>.<br>
     <b>Ink opacity and darkness are unchanged</b> &mdash; per your note the current transparency stays; the exact-Kubelka-Munk &ldquo;darker sumi&rdquo; option is not offered here.
   </div>
 
@@ -133,8 +144,26 @@
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) { return {}; } })();
   const state = {
     char: saved.char && DATA.strokes[saved.char] ? saved.char : DATA.chars[0],
-    decisions: saved.decisions || {}
+    decisions: saved.decisions || {},
+    params: saved.params || {}      // variant id -> { key: value } slider overrides
   };
+
+  /* ---------- tunable parameters ---------- */
+  const TUNING = (typeof STROKE_VARIANT_TUNING === "object" && STROKE_VARIANT_TUNING) ? STROKE_VARIANT_TUNING : {};
+  const DEFAULTS = {};
+  for (const [id, obj] of Object.entries(TUNING)) DEFAULTS[id] = { ...obj };
+  // Drop stale saved keys that no longer exist in app.js
+  for (const id of Object.keys(state.params)) {
+    if (!DEFAULTS[id]) { delete state.params[id]; continue; }
+    for (const k of Object.keys(state.params[id])) if (!(k in DEFAULTS[id])) delete state.params[id][k];
+  }
+  function currentParams(id) { return { ...(DEFAULTS[id] || {}), ...(state.params[id] || {}) }; }
+  function applyParams() { for (const [id, obj] of Object.entries(TUNING)) Object.assign(obj, currentParams(id)); }
+  function restoreParams() { for (const [id, obj] of Object.entries(TUNING)) Object.assign(obj, DEFAULTS[id]); }
+  function paramsKey(flags) {
+    return VARIANT_IDS.filter(id => flags[id] && state.params[id] && Object.keys(state.params[id]).length)
+      .map(id => id + ":" + Object.keys(state.params[id]).sort().map(k => k + "=" + state.params[id][k]).join(",")).join(";");
+  }
   function persist() { localStorage.setItem(STORE, JSON.stringify(state)); }
 
   /* ---------- rendering ---------- */
@@ -142,7 +171,7 @@
   function flagKey(flags) { return VARIANT_IDS.map(id => flags[id] ? "1" : "0").join(""); }
 
   function renderChar(ch, flags) {
-    const key = ch + "|" + flagKey(flags);
+    const key = ch + "|" + flagKey(flags) + "|" + paramsKey(flags);
     if (cache.has(key)) return cache.get(key);
     const canvas = document.createElement("canvas");
     canvas.width = 792; canvas.height = 792;
@@ -150,6 +179,7 @@
     ctx.fillStyle = PAPER; ctx.fillRect(0, 0, 792, 792);
     const prev = {};
     for (const k of Object.keys(STROKE_VARIANTS)) { prev[k] = STROKE_VARIANTS[k]; STROKE_VARIANTS[k] = !!flags[k]; }
+    applyParams();
     try {
       const strokes = DATA.strokes[ch];
       strokes.forEach((s, i) => {
@@ -158,7 +188,9 @@
       });
     } finally {
       for (const k of Object.keys(prev)) STROKE_VARIANTS[k] = prev[k];
+      restoreParams();
     }
+    if (cache.size > 160) cache.delete(cache.keys().next().value);
     cache.set(key, canvas);
     return canvas;
   }
@@ -242,6 +274,8 @@
       comment.addEventListener("input", () => setDecision(v.id, null, comment.value));
       controls.append(comment);
 
+      const tune = v.params && v.params.length && DEFAULTS[v.id] ? buildTunePanel(v) : null;
+
       const info = el("div", { class: "info" },
         el("p", {}, v.summary),
         el("h4", {}, "Why (source)"), el("p", {}, v.why),
@@ -252,15 +286,72 @@
       const card = el("div", { class: "card", id: "card-" + v.id },
         el("div", { class: "card-head" },
           el("div", {}, el("h2", {}, v.title), el("div", { class: "jp" }, v.jp + "  \u00b7  flag: " + v.id)), status),
-        el("div", { class: "card-body" }, info, views), controls);
+        el("div", { class: "card-body" }, info, views), tune ? tune.panel : null, controls);
       host.append(card);
 
       for (const view of [base, alt, diff]) {
         view.addEventListener("click", () => openCompare(v));
       }
-      cardRefs[v.id] = { card, base, alt, diff, stat, status, decisionEls, comment };
+      cardRefs[v.id] = { card, base, alt, diff, stat, status, decisionEls, comment, tune };
     }
     refreshDecisionUI();
+    for (const v of DATA.variants) refreshTuneUI(v.id);
+  }
+
+  function fmt(x, step) {
+    const dec = String(step).includes(".") ? String(step).split(".")[1].length : 0;
+    return Number(x).toFixed(Math.min(4, dec));
+  }
+  function buildTunePanel(v) {
+    const mod = el("span", { class: "mod" });
+    const resetBtn = el("button", { class: "btn", type: "button" }, "Reset to defaults");
+    const grid = el("div", { class: "tune-grid" });
+    const rows = {};
+    for (const p of v.params) {
+      if (!(p.key in DEFAULTS[v.id])) continue;
+      const range = el("input", { type: "range", min: String(p.min), max: String(p.max), step: String(p.step) });
+      const val = el("span", { class: "val" });
+      const undo = el("button", { type: "button", title: "reset this slider" }, "\u21ba");
+      const row = el("div", { class: "tune-row" }, el("span", {}, p.label), range, val, undo);
+      range.addEventListener("input", () => setParam(v.id, p.key, parseFloat(range.value)));
+      undo.addEventListener("click", () => setParam(v.id, p.key, null));
+      rows[p.key] = { p, range, val };
+      grid.append(row);
+    }
+    resetBtn.addEventListener("click", () => { delete state.params[v.id]; persist(); refreshTuneUI(v.id); scheduleVariantRender(v); });
+    const panel = el("div", { class: "tune" },
+      el("div", { class: "tune-head" }, el("span", {}, "Tune"), mod, el("span", { style: "flex:1" }), resetBtn), grid);
+    return { panel, rows, mod };
+  }
+  function setParam(id, key, value) {
+    const def = DEFAULTS[id][key];
+    const cur = state.params[id] || {};
+    if (value === null || Math.abs(value - def) < 1e-9) delete cur[key]; else cur[key] = value;
+    if (Object.keys(cur).length) state.params[id] = cur; else delete state.params[id];
+    persist();
+    refreshTuneUI(id);
+    scheduleVariantRender(DATA.variants.find(x => x.id === id));
+  }
+  function refreshTuneUI(id) {
+    const ref = cardRefs[id];
+    if (!ref || !ref.tune) return;
+    const cur = currentParams(id);
+    let n = 0;
+    for (const [k, r] of Object.entries(ref.tune.rows)) {
+      const changed = state.params[id] && k in state.params[id];
+      if (changed) n++;
+      if (document.activeElement !== r.range) r.range.value = String(cur[k]);
+      r.val.textContent = fmt(cur[k], r.p.step);
+      r.val.classList.toggle("changed", !!changed);
+      r.val.title = "default " + fmt(DEFAULTS[id][k], r.p.step);
+    }
+    ref.tune.mod.textContent = n ? `${n} slider${n > 1 ? "s" : ""} changed from the app.js defaults` : "";
+  }
+  const variantTimers = {};
+  function scheduleVariantRender(v) {
+    clearTimeout(variantTimers[v.id]);
+    cardRefs[v.id].alt._busy.style.display = "flex";
+    variantTimers[v.id] = setTimeout(() => renderVariant(v, state.char), 220);
   }
 
   function setDecision(id, decision, comment) {
@@ -308,20 +399,7 @@
       const c = renderChar(ch, baseFlags);
       for (const v of DATA.variants) setCanvas(cardRefs[v.id].base, c);
     });
-    for (const v of DATA.variants) {
-      jobs.push(() => {
-        const flags = { [v.id]: true };
-        const c = renderChar(ch, flags);
-        const ref = cardRefs[v.id];
-        setCanvas(ref.alt, c);
-        const base = renderChar(ch, baseFlags);
-        const dc = diffCanvas(base, c);
-        ref.diff.style.display = showDiff ? "" : "none";
-        setCanvas(ref.diff, dc);
-        const pct = dc._stat.ink ? (100 * dc._stat.changed / dc._stat.ink) : 0;
-        ref.stat.textContent = `${dc._stat.changed.toLocaleString()} pixels differ (${pct.toFixed(1)}% of the ink area) for ${ch}`;
-      });
-    }
+    for (const v of DATA.variants) jobs.push(() => renderVariant(v, ch));
     for (const v of DATA.variants) {
       for (const k of ["base", "alt", "diff"]) cardRefs[v.id][k]._busy.style.display = "flex";
     }
@@ -329,6 +407,19 @@
       if (token !== renderToken || i >= jobs.length) return;
       setTimeout(() => { if (token !== renderToken) return; jobs[i](); step(i + 1); }, 20);
     })(0);
+  }
+
+  function renderVariant(v, ch) {
+    const showDiff = document.getElementById("showDiff").checked;
+    const c = renderChar(ch, { [v.id]: true });
+    const ref = cardRefs[v.id];
+    setCanvas(ref.alt, c);
+    const base = renderChar(ch, {});
+    const dc = diffCanvas(base, c);
+    ref.diff.style.display = showDiff ? "" : "none";
+    setCanvas(ref.diff, dc);
+    const pct = dc._stat.ink ? (100 * dc._stat.changed / dc._stat.ink) : 0;
+    ref.stat.textContent = `${dc._stat.changed.toLocaleString()} pixels differ (${pct.toFixed(1)}% of the ink area) for ${ch}`;
   }
 
   /* ---------- combined ---------- */
@@ -390,12 +481,18 @@
   function exportPayload() {
     const out = {
       generated: new Date().toISOString(),
-      note: "Variant decisions for static/app.js STROKE_VARIANTS. decision: ok | tweak | no",
+      note: "Variant decisions for static/app.js STROKE_VARIANTS. decision: ok | tweak | no. params = slider values (STROKE_VARIANT_TUNING) at export time.",
       decisions: {}
     };
     for (const v of DATA.variants) {
       const d = state.decisions[v.id];
       out.decisions[v.id] = { decision: d && d.decision ? d.decision : "undecided", comment: d ? (d.comment || "") : "" };
+      if (DEFAULTS[v.id]) {
+        const cur = currentParams(v.id);
+        const shown = (v.params || []).map(p => p.key).filter(k => k in cur);
+        out.decisions[v.id].params = Object.fromEntries(shown.map(k => [k, cur[k]]));
+        out.decisions[v.id].changed_params = Object.keys(state.params[v.id] || {});
+      }
     }
     return out;
   }

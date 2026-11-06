@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Apply review decisions from stroke_approval.html to STROKE_VARIANTS in static/app.js.
 
+Approved ("ok") variants are switched on. For approved and "tweak" variants, exported slider values ("params") are
+written into the variant's tuning block (STROKE_VARIANT_TUNING maps variant id -> `const X_TUNING = {...}`).
+
 CLI:
     python3 scripts/apply_stroke_approvals.py decisions.json [--app-js static/app.js] [--dry-run]
 """
@@ -110,6 +113,78 @@ def apply_decisions(
     return new_js, summary
 
 
+TUNING_MAP_RE = re.compile(r"const\s+STROKE_VARIANT_TUNING\s*=\s*\{([^}]*)\};")
+PARAMS_APPLY_DECISIONS = ("ok", "tweak")
+
+
+def _tuning_block_names(js_text: str) -> dict[str, str]:
+    """variant id -> tuning const name, parsed from STROKE_VARIANT_TUNING."""
+    m = TUNING_MAP_RE.search(js_text)
+    if not m:
+        return {}
+    return dict(re.findall(r"([A-Za-z0-9_$]+)\s*:\s*([A-Za-z0-9_$]+)", m.group(1)))
+
+
+def _fmt_number(x: float) -> str:
+    if float(x).is_integer() and abs(x) >= 10:
+        return str(int(x))
+    out = f"{float(x):.4f}".rstrip("0")
+    return out + "0" if out.endswith(".") else out
+
+
+def apply_params(
+    js_text: str, decisions: dict[str, Any]
+) -> tuple[str, dict[str, dict[str, tuple[float, float]]]]:
+    """Write exported slider values into the tuning blocks of approved / tweak variants.
+
+    Returns (new_js_text, {variant_id: {key: (old, new)}}) listing only values that changed.
+    Unknown variants or keys are warned about and skipped.
+    """
+    raw = decisions.get("decisions", decisions) if isinstance(decisions, dict) else {}
+    names = _tuning_block_names(js_text)
+    changes: dict[str, dict[str, tuple[float, float]]] = {}
+    for vid, entry in (raw or {}).items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("params"), dict):
+            continue
+        if entry.get("decision") not in PARAMS_APPLY_DECISIONS:
+            continue
+        const_name = names.get(vid)
+        if not const_name:
+            warnings.warn(f"No tuning block for variant '{vid}'; params ignored", UserWarning)
+            continue
+        block_re = re.compile(r"(const\s+" + re.escape(const_name) + r"\s*=\s*\{)([\s\S]*?)(\};)")
+        m = block_re.search(js_text)
+        if not m:
+            warnings.warn(f"Tuning block {const_name} not found; params for '{vid}' ignored", UserWarning)
+            continue
+        body = m.group(2)
+        for key, value in entry["params"].items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            line_re = re.compile(r"^(\s*" + re.escape(key) + r"\s*:\s*)(-?[0-9.]+(?:e-?[0-9]+)?)", re.MULTILINE)
+            lm = line_re.search(body)
+            if not lm:
+                warnings.warn(f"Unknown param '{key}' for variant '{vid}'", UserWarning)
+                continue
+            old = float(lm.group(2))
+            if abs(old - float(value)) < 1e-9:
+                continue
+            body = body[:lm.start(2)] + _fmt_number(value) + body[lm.end(2):]
+            changes.setdefault(vid, {})[key] = (old, float(value))
+        js_text = js_text[:m.start(2)] + body + js_text[m.end(2):]
+    return js_text, changes
+
+
+def format_params_table(changes: dict[str, dict[str, tuple[float, float]]]) -> str:
+    if not changes:
+        return "Params: no slider values changed."
+    lines = ["Params:", f"{'Variant':<16} {'Param':<18} {'Old':>10} {'New':>10}", "-" * 57]
+    for vid, kv in changes.items():
+        for k, (old, new) in kv.items():
+            lines.append(f"{vid:<16} {k:<18} {_fmt_number(old):>10} {_fmt_number(new):>10}")
+    return "\n".join(lines)
+
+
 def format_summary_table(summary: dict[str, tuple[bool, bool]]) -> str:
     """Format old -> new values summary table."""
     lines = [
@@ -169,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         js_text = app_js_path.read_text(encoding="utf-8")
         new_js, summary = apply_decisions(js_text, decisions_data)
+        new_js, param_changes = apply_params(new_js, decisions_data)
     except StrokeVariantsError as e:
         sys.stderr.write(f"Error applying decisions: {e}\n")
         sys.exit(2)
@@ -177,8 +253,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(2)
 
     print(format_summary_table(summary))
+    print(format_params_table(param_changes))
 
-    has_changes = any(old != new for old, new in summary.values())
+    has_changes = any(old != new for old, new in summary.values()) or bool(param_changes)
     if has_changes:
         if args.dry_run:
             print(f"[dry-run] Changes detected for {app_js_path} (not written).")

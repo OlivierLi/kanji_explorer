@@ -24,6 +24,10 @@ setTimeout(() => {
     ta.value = 'less sharp';
     ta.dispatchEvent(new Event('input'));
     document.getElementById('renderCombined').click();
+    window.__dkBefore = document.querySelector('#card-dryKasure .view:nth-child(2) canvas').toDataURL();
+    const slider = document.querySelector('#card-dryKasure .tune-row input[type=range]');
+    slider.value = slider.max;
+    slider.dispatchEvent(new Event('input'));
     document.querySelector('#card-wetDryTrim .view').click();
   } catch (e) { window.__errs.push('driver: ' + e.message); }
   setTimeout(() => {
@@ -37,6 +41,9 @@ setTimeout(() => {
       canvases: document.querySelectorAll('#cards canvas').length,
       combined: document.querySelectorAll('#combPair canvas').length,
       stats: [...document.querySelectorAll('.stat')].map(s => s.textContent),
+      sliders: Object.fromEntries([...document.querySelectorAll('#cards .card')].map(c => [c.id.slice(5), c.querySelectorAll('.tune-row input[type=range]').length])),
+      dkChanged: window.__dkBefore !== document.querySelector('#card-dryKasure .view:nth-child(2) canvas').toDataURL(),
+      dkMod: (document.querySelector('#card-dryKasure .tune-head .mod') || {}).textContent,
     });
     document.body.append(out);
   }, 8000);
@@ -83,3 +90,10 @@ def test_stroke_approval_page_renders_variants_and_records_decisions() -> None:
     for line in data["stats"]:
         changed = int(line.split(" pixels")[0].replace(",", ""))
         assert changed > 0, line
+    # sliders: one per declared param; moving one re-renders the variant and is persisted with the judgment
+    for v in VARIANTS:
+        assert data["sliders"][v["id"]] == len(v.get("params", [])), v["id"]
+    assert data["dkChanged"] is True
+    assert "1 slider changed" in data["dkMod"]
+    first_key = next(v for v in VARIANTS if v["id"] == "dryKasure")["params"][0]
+    assert data["store"]["params"]["dryKasure"] == {first_key["key"]: first_key["max"]}

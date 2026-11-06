@@ -694,30 +694,61 @@ const STROKE_VARIANTS = {
   wetDryTrim: false
 };
 
-// Tunable dryKasure constants (mutable so the visibility audit can sweep them; see scripts/audit/variant_visibility.py)
+/*
+ * Per-variant look parameters. Each block is a flat `key: number` list so stroke_approval.html can expose it as
+ * sliders and scripts/apply_stroke_approvals.py can write reviewed values back. STROKE_VARIANT_TUNING maps variant
+ * id -> block. Values are read at render time, so changing a block and re-rendering is enough.
+ */
+const ANCHORED_ENDS_TUNING = {
+  naFootLen: 9.0,       // KanjiVG units (box = 109): length of the na (捺) foot taper
+  sweepLen: 24.0        // KanjiVG units: length of the harai (撇) taper
+};
+
+const ELLIPTICAL_CAPS_TUNING = {
+  exitDepth: 0.42,      // exit-cap depth as a fraction of the half width (round tuft)
+  entryDepth: 0.32,     // entry-cap depth as a fraction of the half width
+  ellipticityGain: 0.32 // extra depth per unit of tuft flattening (ellipticity - 1)
+};
+
+const STRONG_CEFENG_TUNING = {
+  shiftGain: 0.30,      // lateral tuft shift per unit of obliqueness
+  shiftCap: 0.40,       // maximum shift as a fraction of the stroke width
+  toneGain: 2.6,        // tip-edge vs. belly-edge tone asymmetry multiplier
+  entryFloor: 0.6       // share of the shift kept at an exposed-tip (lufeng) entry
+};
+
 const DRY_KASURE_TUNING = {
-  minLen: 40,        // KanjiVG units (box = 109)
-  wetOnset: 0.86,    // tuft wetness below which the tip starts to split
+  minLen: 40,           // KanjiVG units: shorter strokes never split
+  wetOnset: 0.86,       // tuft wetness below which the tip starts to split (higher = earlier, on more strokes)
   wetSpan: 0.10,
   uOnset: 0.40,
   minDry: 0.20,
-  freeWidth: 0.20,   // split width as a fraction of the local stroke width, free (harai) endings
-  stopWidth: 0.11,   // stopped / framed endings
+  freeWidth: 0.14,      // split width as a fraction of the local stroke width, free (harai) endings
+  stopWidth: 0.07,      // stopped / framed endings
   stopEndU: 0.90,
   threeSlitDry: 0.65,
-  streakDepth: 0.45,
-  alpha: 0.92
+  streakDepth: 0.35,    // how much each split pinches and swells along the stroke
+  alpha: 0.75,          // how completely a split removes ink (1 = bare paper)
+  grain: 0.5            // paper-peak speckle in the dry zone (Chu & Tai 2004 p. 81 peak catching)
 };
 
-// Tunable wetDryTrim constants (coarse wet-front bites; see renderPhysicallyBasedInkDispersionAndOptics)
 const WET_DRY_TRIM_TUNING = {
-  depthPx: 5.0,      // maximum bite depth into the contour, canvas px at the 792 px box
-  macroMix: 0.7,     // share of the macro-fibre field (vs. fine filaments) that shapes the bites
-  biteLo: 0.05,
-  biteHi: 0.55,
-  wetFloor: 0.35,    // fraction of the bite depth present even where the tuft is still fully wet
+  depthPx: 3.5,         // maximum bite depth into the contour, canvas px at the 792 px box
+  fineRough: 0.36,      // fine fibre nibbling inside the low-passed rim (Chu & Tai 2005 Eq. 11 r_scale)
+  macroMix: 0.7,        // share of the macro-fibre field (vs. fine filaments) that shapes the bites
+  biteLo: 0.10,         // bite threshold on the fibre field (higher = fewer bites)
+  biteHi: 0.60,
+  wetFloor: 0.15,       // fraction of the bite depth present even where the tuft is still fully wet
   wetOnset: 0.93,
   wetSpan: 0.15
+};
+
+const STROKE_VARIANT_TUNING = {
+  anchoredEnds: ANCHORED_ENDS_TUNING,
+  ellipticalCaps: ELLIPTICAL_CAPS_TUNING,
+  strongCefeng: STRONG_CEFENG_TUNING,
+  dryKasure: DRY_KASURE_TUNING,
+  wetDryTrim: WET_DRY_TRIM_TUNING
 };
 
 function getStrokeVariantKey() {
@@ -1303,7 +1334,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       }
     } else if (behavior.isRightNa) {
       // 捺 (nà / 磔) - clean gradual press to wave foot at u=0.72 without mid-stroke bulge, then crisp taper to point
-      const footU = STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * totalLen, 9.0) / Math.max(0.1, totalLen) : 0.72;
+      const footU = STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * totalLen, ANCHORED_ENDS_TUNING.naFootLen) / Math.max(0.1, totalLen) : 0.72;
       if (u <= footU) {
         const t = u / footU;
         const swell = Math.pow(t, 1.15);
@@ -1427,7 +1458,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const isPostCornerSweep = !!(lastCf && lastCf.u > 0.44);
           const sweepStart = isPostCornerSweep
             ? lastCf.u
-            : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * totalLen, 24.0) / Math.max(0.1, totalLen)) : 0.43);
+            : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * totalLen, ANCHORED_ENDS_TUNING.sweepLen) / Math.max(0.1, totalLen)) : 0.43);
           if (u > sweepStart) {
             const tSweep = (u - sweepStart) / (1 - sweepStart);
             const exp = isPostCornerSweep ? 0.82 : 0.98;
@@ -1603,13 +1634,13 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     // Area/width-conserving Zhongfeng (中鋒) vs. Cefeng (側鋒) double-half-ellipse lateral shift
     // Preserves rawWL[i] + rawWR[i] exactly while shifting the stiff tip toward one boundary and the soft belly toward the other
     // strongCefeng: a lufeng (exposed-tip) entry keeps a floor of the shift instead of starting centred
-    const uStartFloor = (STROKE_VARIANTS.strongCefeng && !isConcealedEntry) ? 0.6 : 0.0;
+    const uStartFloor = (STROKE_VARIANTS.strongCefeng && !isConcealedEntry) ? STRONG_CEFENG_TUNING.entryFloor : 0.0;
     const uStartRaw = u < 0.06 ? (u / 0.06) * (u / 0.06) * (3.0 - 2.0 * (u / 0.06)) : 1.0;
     const uStartFade = uStartFloor + (1.0 - uStartFloor) * uStartRaw;
     const uEndFade = u > 0.90 ? ((1.0 - u) / 0.10) * ((1.0 - u) / 0.10) * (3.0 - 2.0 * ((1.0 - u) / 0.10)) : 1.0;
     const wTot = rawWL[i] + rawWR[i];
-    const cefengGain = STROKE_VARIANTS.strongCefeng ? 0.30 : 0.075;
-    const cefengCap = STROKE_VARIANTS.strongCefeng ? 0.40 : 0.095;
+    const cefengGain = STROKE_VARIANTS.strongCefeng ? STRONG_CEFENG_TUNING.shiftGain : 0.075;
+    const cefengCap = STROKE_VARIANTS.strongCefeng ? STRONG_CEFENG_TUNING.shiftCap : 0.095;
     const cefengShift = Math.max(-cefengCap, Math.min(cefengCap, cefengGain * cefengParam * sinPsi * uStartFade * uEndFade));
     const shiftedL = rawWL[i] - 0.5 * wTot * cefengShift;
     rawWL[i] = wTot > 0.16 ? Math.max(0.08, Math.min(wTot - 0.08, shiftedL)) : rawWL[i];
@@ -1973,9 +2004,9 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     sweepStartU: (function() {
       const lastCf = evalCornerFeatures.length > 0 ? evalCornerFeatures[evalCornerFeatures.length - 1] : null;
       const isPost = !!(lastCf && lastCf.u > 0.44);
-      return isPost ? lastCf.u : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * origLen, 24.0) / Math.max(0.1, origLen)) : 0.43);
+      return isPost ? lastCf.u : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * origLen, ANCHORED_ENDS_TUNING.sweepLen) / Math.max(0.1, origLen)) : 0.43);
     })(),
-    naFootU: STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * origLen, 9.0) / Math.max(0.1, origLen) : 0.72,
+    naFootU: STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * origLen, ANCHORED_ENDS_TUNING.naFootLen) / Math.max(0.1, origLen) : 0.72,
     _brushCompileKey: getBrushCompileKey(SLENDER_PHYSICS)
   };
 }
@@ -1992,7 +2023,9 @@ function strokeExitCapControls(compiled, lastL, lastR, endPt) {
   const isDot = compiled.behavior.isDot || compiled.behavior.isCrownDot;
   if (STROKE_VARIANTS.ellipticalCaps) {
     const E = Math.max(1.0, Math.min(1.8, endPt.tuftEllipticity ?? 1.0));
-    const depth = 0.5 * width * Math.max(isDot ? 0.50 : 0.42, Math.min(0.70, (isDot ? 0.50 : 0.42) + 0.32 * (E - 1.0)));
+    const T = ELLIPTICAL_CAPS_TUNING;
+    const d0 = T.exitDepth + (isDot ? 0.08 : 0.0);
+    const depth = 0.5 * width * Math.max(d0, Math.min(T.exitDepth + 0.28, d0 + T.ellipticityGain * (E - 1.0)));
     const cd = depth * (4.0 / 3.0);
     return {
       kind: "C",
@@ -2011,7 +2044,9 @@ function strokeEntryCapControls(compiled, firstL, firstR, p0) {
   let back;
   if (STROKE_VARIANTS.ellipticalCaps) {
     const E = Math.max(1.0, Math.min(1.8, p0.tuftEllipticity ?? 1.0));
-    const depth = 0.5 * width * Math.max(isDot ? 0.40 : 0.32, Math.min(0.60, (isDot ? 0.40 : 0.32) + 0.30 * (E - 1.0)));
+    const T = ELLIPTICAL_CAPS_TUNING;
+    const d0 = T.entryDepth + (isDot ? 0.08 : 0.0);
+    const depth = 0.5 * width * Math.max(d0, Math.min(T.entryDepth + 0.28, d0 + T.ellipticityGain * (0.30 / 0.32) * (E - 1.0)));
     back = depth * (4.0 / 3.0);
   } else {
     back = width * (isDot ? 0.18 : 0.20) * 0.4;
@@ -2208,6 +2243,7 @@ function getKasureChannels(compiled) {
   // Stopped endings (tome, folds, box frames) press the tuft back together, so splits close again before the end
   // and are kept narrower (this is what restrains enclosures such as 国 / 日).
   const isFree = !!(b.isSweepEnd || b.isVerticalSweep || b.isRightNa) && !compiled.hookFeature;
+  compiled._kasureIsFree = isFree;
   if (!compiled._dryness || compiled._dryness.length !== pts.length) {
     const sstep = (a, bb, x) => { const t = Math.max(0, Math.min(1, (x - a) / (bb - a))); return t * t * (3 - 2 * t); };
     compiled._dryness = pts.map(p => {
@@ -3561,6 +3597,16 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       trimDryLut[k] = Math.max(0.0, Math.min(1.0, (WET_DRY_TRIM_TUNING.wetOnset - wet) / WET_DRY_TRIM_TUNING.wetSpan));
     }
   }
+  // dryKasure grain: per-u dry-brush dryness of this stroke (0 where the stroke does not split)
+  let kasureDryLut = null;
+  if (STROKE_VARIANTS.dryKasure && DRY_KASURE_TUNING.grain > 0 && getKasureChannels(compiled).length > 0 && compiled._dryness) {
+    kasureDryLut = new Float32Array(65);
+    for (let k = 0; k <= 64; k++) {
+      // Stopped strokes / frames carry proportionally less speckle, matching their narrower splits
+      const grainScale = compiled._kasureIsFree ? 1.0 : Math.min(1.0, DRY_KASURE_TUNING.stopWidth / Math.max(1e-3, DRY_KASURE_TUNING.freeWidth));
+      kasureDryLut[k] = grainScale * (compiled._dryness[Math.min(pts.length - 1, Math.round((k / 64) * (pts.length - 1)))] || 0.0);
+    }
+  }
 
   for (let ly = 0; ly < bh; ly++) {
     const rowOff = ly * bw;
@@ -3656,7 +3702,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
 
       // Zhongfeng (中鋒) vs. Cefeng (側鋒) Tip-Edge vs. Belly-Edge Tonal & Meniscus Asymmetry
       // (Xie et al. 2013 Sec. 4.1 upright vs. oblique style; Chu & Tai 2002 Sec. 2; Xu et al. 2004 Eq. 5)
-      const cefengToneGain = STROKE_VARIANTS.strongCefeng ? 2.6 : 1.0;
+      const cefengToneGain = STROKE_VARIANTS.strongCefeng ? STRONG_CEFENG_TUNING.toneGain : 1.0;
       const cefengModulation = 0.052 * cefengToneGain * cefengInt * cefengBiasHere * Math.sin(vClamped * (Math.PI * 0.5)) * wCore;
 
       // Zero-B5 cellulose fiber granulation (active everywhere, including spine core)
@@ -3759,12 +3805,12 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         let keep = 1.0;
         if (mb < 0.98) {
           const rough = 0.45 * fil + 0.35 * mFib + 0.20 * gZero;
-          const phiTrim = (mb - 0.48) + 0.48 * rough;
+          const phiTrim = (mb - 0.48) + TT.fineRough * rough;
           const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.10) / 0.20));
           keep = tTrim * tTrim * (3.0 - 2.0 * tTrim);
         }
         const absVt = Math.abs(v);
-        if (absVt > 0.2 && absVt < 1.2) {
+        if (absVt > 0.2 && absVt < 2.0) {
           const edgeDist = Math.max(0.0, dSpine * (1.0 / absVt - 1.0));
           const dryU = trimDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
           const biteField = TT.macroMix * mFib + (1.0 - TT.macroMix) * fil;
@@ -3776,6 +3822,18 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
           }
         }
         finalAlpha *= keep;
+      }
+
+      // dryKasure grain (Chu & Tai 2004 p. 81): a dry tuft only deposits on raised paper fibres, so the dry zone breaks
+      // into speckle along bristle tracks instead of carrying only clean vector splits
+      if (kasureDryLut && mask > 0.01 && Math.abs(v) < 0.95) {
+        const dk = kasureDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
+        if (dk > 0.02) {
+          const track = 0.5 + 0.5 * Math.sin(v * 23.0 + 2.1 * Math.sin(u * 9.0));
+          const peak = hVal + 0.35 * (track - 0.5);
+          const tp = Math.max(0.0, Math.min(1.0, (peak - (0.80 - 0.30 * dk)) / 0.12));
+          finalAlpha *= 1.0 - 0.9 * DRY_KASURE_TUNING.grain * dk * tp * tp * (3.0 - 2.0 * tp);
+        }
       }
 
       if (finalAlpha < 0.004) {

@@ -32,6 +32,11 @@ VARIANTS = [
         "affects": "Every stroke with a blunt start or end (horizontals, verticals, dots, 横折 ends). Sharp-tipped strokes (撇 / 捺 tails, 鉤) are unchanged.",
         "risk": "Ends look rounder / softer. May feel less crisp for a 瘦金體 (slender gold) style that prefers squared ends.",
         "look_for": "Left and right ends of horizontals, the top of verticals, dots.",
+        "params": [
+            {"key": "exitDepth", "label": "End-cap roundness", "min": 0.15, "max": 0.8, "step": 0.01},
+            {"key": "entryDepth", "label": "Start-cap roundness", "min": 0.1, "max": 0.7, "step": 0.01},
+            {"key": "ellipticityGain", "label": "Extra roundness when the tuft is flattened", "min": 0.0, "max": 0.8, "step": 0.02},
+        ],
     },
     {
         "id": "mitreCorners",
@@ -52,6 +57,12 @@ VARIANTS = [
         "affects": "All strokes whose entry direction differs from the nib angle (mostly 撇, 点, 横 with a slanted attack).",
         "risk": "Shifts where the contour sits relative to the KanjiVG centreline (a few px) and raises tonal contrast across the width. Strength is a model choice rather than a measured value.",
         "look_for": "Tonal asymmetry across 撇 and 点, slight lateral offset of slanted 横.",
+        "params": [
+            {"key": "shiftGain", "label": "Tuft shift toward one edge", "min": 0.0, "max": 0.6, "step": 0.01},
+            {"key": "shiftCap", "label": "Maximum shift (fraction of width)", "min": 0.05, "max": 0.6, "step": 0.01},
+            {"key": "toneGain", "label": "Tip-side vs. belly-side tone contrast", "min": 1.0, "max": 5.0, "step": 0.1},
+            {"key": "entryFloor", "label": "Shift already present at an exposed-tip start", "min": 0.0, "max": 1.0, "step": 0.05},
+        ],
     },
     {
         "id": "dryKasure",
@@ -59,9 +70,18 @@ VARIANTS = [
         "jp": "渇筆（かすれ）を墨量シミュレーションに連動",
         "summary": "Hairline gaps appear wherever the simulated tuft has run low on ink, on any long stroke (not only long 撇); in very dry tails the gaps stay open to the tip so it forks into a few prongs.",
         "why": "Chu & Tai 2004 'Dry brush': ink deposits only where the dry map peaks, with a threshold set by brush wetness and pressure; Chu & Tai 2002 Sec. 3: a drying tuft splits, giving the flying-white effect; Xu et al. 2004 Sec. 5.5 splits the tuft when stress exceeds a threshold. Today kasure is hard-gated to 撇 over 45 units and ignores the wetness the model computes.",
-        "affects": "Long strokes (about 60+ units) get faint feibai near the end; short strokes stay solid. Strength follows the existing 'kasure amount' slider.",
+        "affects": "Long strokes dry toward the end: sweeps fork open at the tip, stopped strokes and box frames get narrower splits that close before the end. A dry zone also picks up paper-grain speckle.",
         "risk": "Adds visible texture to strokes that were clean. Depletion is a model heuristic, so which strokes dry out is a tuning decision.",
         "look_for": "Tails of 撇 / 捺, ends of long 横 and 竖.",
+        "params": [
+            {"key": "freeWidth", "label": "Split width on sweeps (払い)", "min": 0.0, "max": 0.35, "step": 0.01},
+            {"key": "stopWidth", "label": "Split width on stopped strokes / frames", "min": 0.0, "max": 0.25, "step": 0.01},
+            {"key": "alpha", "label": "Split clarity (1 = bare paper)", "min": 0.2, "max": 1.0, "step": 0.02},
+            {"key": "streakDepth", "label": "Split breakup along the stroke", "min": 0.0, "max": 0.9, "step": 0.05},
+            {"key": "grain", "label": "Paper-grain speckle in the dry zone", "min": 0.0, "max": 1.5, "step": 0.05},
+            {"key": "wetOnset", "label": "How early the brush runs dry (higher = more strokes)", "min": 0.78, "max": 0.94, "step": 0.005},
+            {"key": "minLen", "label": "Shortest stroke that can split (KanjiVG units)", "min": 15, "max": 100, "step": 1},
+        ],
     },
     {
         "id": "anchoredEnds",
@@ -72,6 +92,10 @@ VARIANTS = [
         "affects": "Long 捺 (over ~32 units) and long free 撇 (over ~42 units). Short strokes are identical.",
         "risk": "Long sweeps become fatter for longer and then taper more abruptly, which changes the elegant long taper typical of slender-gold style.",
         "look_for": "The long 捺 in 道 / 永 / 長, the long 撇 in 井 / 力.",
+        "params": [
+            {"key": "naFootLen", "label": "捺 foot taper length (KanjiVG units)", "min": 3, "max": 20, "step": 0.5},
+            {"key": "sweepLen", "label": "撇 taper length (KanjiVG units)", "min": 8, "max": 45, "step": 1},
+        ],
     },
     {
         "id": "wetDryTrim",
@@ -79,9 +103,16 @@ VARIANTS = [
         "jp": "紙繊維による滲み境界のトリミング",
         "summary": "The silhouette is trimmed where the low-passed wet mask minus a paper-fibre roughness term falls below zero, so the edge follows the fibres instead of the ideal contour. Colour and darkness are untouched.",
         "why": "Chu & Tai 2005 (MoXi) Sec. 6.1 / Eq. 11 trims the output where phi = rho_tau + r_scale (r + r_bias) < 0, with r a blurred random-spot texture, for natural, slightly rough boundaries.",
-        "affects": "Every stroke edge. Effect is subtle; use the swipe compare to see it.",
+        "affects": "Every stroke edge; bites deepen as the brush dries along a stroke.",
         "risk": "Slightly ragged silhouettes. Interacts with the nijimi halo thresholds used by the audit metrics, which would be rechecked.",
         "look_for": "Edges at 2-3x zoom in the swipe compare.",
+        "params": [
+            {"key": "depthPx", "label": "Bite depth into the edge (px)", "min": 0.0, "max": 8.0, "step": 0.1},
+            {"key": "biteLo", "label": "Bite rarity (higher = fewer bites)", "min": -0.3, "max": 0.8, "step": 0.02},
+            {"key": "macroMix", "label": "Bite size: fine fibres to coarse fibres", "min": 0.0, "max": 1.0, "step": 0.05},
+            {"key": "wetFloor", "label": "Raggedness while the brush is still wet", "min": 0.0, "max": 1.0, "step": 0.05},
+            {"key": "fineRough", "label": "Fine fibre nibbling at the rim", "min": 0.0, "max": 0.8, "step": 0.02},
+        ],
     },
 ]
 

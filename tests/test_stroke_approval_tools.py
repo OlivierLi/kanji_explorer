@@ -10,7 +10,9 @@ import pytest
 
 from scripts.apply_stroke_approvals import (
     StrokeVariantsError,
+    _tuning_block_names,
     apply_decisions,
+    apply_params,
     main,
 )
 from scripts.audit.evaluate_brushwork_canvas import APP_JS_PATH, BASE_DIR
@@ -210,3 +212,47 @@ def test_cli_writes_file_when_not_dry_run(tmp_path: Path) -> None:
     ret = main([str(dec_file), "--app-js", str(app_js_file)])
     assert ret == 0
     assert "anchoredEnds: true" in app_js_file.read_text(encoding="utf-8")
+
+
+_TUNED_JS = (
+    "const STROKE_VARIANTS = {\n  dryKasure: false,\n  wetDryTrim: false\n};\n"
+    "const DRY_KASURE_TUNING = {\n  freeWidth: 0.14,      // comment kept\n  grain: 0.5\n};\n"
+    "const WET_DRY_TRIM_TUNING = {\n  depthPx: 2.5\n};\n"
+    "const STROKE_VARIANT_TUNING = {\n  dryKasure: DRY_KASURE_TUNING,\n  wetDryTrim: WET_DRY_TRIM_TUNING\n};\n"
+)
+
+
+def test_apply_params_writes_ok_and_tweak_values_only() -> None:
+    decisions = {"decisions": {
+        "dryKasure": {"decision": "tweak", "params": {"freeWidth": 0.09, "grain": 0.5}},
+        "wetDryTrim": {"decision": "no", "params": {"depthPx": 7.0}},
+    }}
+    new_js, changes = apply_params(_TUNED_JS, decisions)
+    assert changes == {"dryKasure": {"freeWidth": (0.14, 0.09)}}
+    assert "freeWidth: 0.09,      // comment kept" in new_js
+    assert "depthPx: 2.5" in new_js  # rejected variant untouched
+    assert new_js.replace("0.09", "0.14", 1) == _TUNED_JS
+
+
+def test_apply_params_warns_on_unknown_key() -> None:
+    decisions = {"decisions": {"dryKasure": {"decision": "ok", "params": {"nope": 1.0}}}}
+    with pytest.warns(UserWarning, match="Unknown param 'nope'"):
+        new_js, changes = apply_params(_TUNED_JS, decisions)
+    assert changes == {} and new_js == _TUNED_JS
+
+
+def test_page_sliders_match_app_js_tuning_blocks() -> None:
+    """Every slider on the review page maps to an existing tuning key whose app.js default lies inside the slider range."""
+    app_js = APP_JS_PATH.read_text(encoding="utf-8")
+    names = _tuning_block_names(app_js)
+    for v in VARIANTS:
+        params = v.get("params", [])
+        if not params:
+            continue
+        assert v["id"] in names, f"{v['id']} has sliders but no STROKE_VARIANT_TUNING entry"
+        block = re.search(r"const\s+" + names[v["id"]] + r"\s*=\s*\{([^}]*)\};", app_js)
+        assert block, names[v["id"]]
+        for p in params:
+            m = re.search(r"^\s*" + p["key"] + r"\s*:\s*(-?[0-9.]+)", block.group(1), re.MULTILINE)
+            assert m, f"{v['id']}.{p['key']} missing from {names[v['id']]}"
+            assert p["min"] <= float(m.group(1)) <= p["max"], (v["id"], p, m.group(1))
