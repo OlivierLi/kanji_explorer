@@ -96,6 +96,12 @@ THRESHOLDS = {
     "i6_min_bristle_striation_rms": 1.1,
     "i7_min_dwell_pool_enrichment": 3.5,
     "i8_min_crossing_layer_darkening": 10.0,
+    "b1_min_core_mantle_darkness_delta": 1.5,
+    "b2_min_cefeng_asymmetry_index": 0.6,
+    "b3_min_elastica_plasticity_response": 0.05,
+    "b3_max_tuft_step_rad": 0.45,
+    "b4_min_compression_squeeze_contrast": 1.5,
+    "b5_min_streamline_coherence_ratio": 1.04,
 }
 
 
@@ -1347,14 +1353,30 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         ? ((thinWarmSum / thinWarmCount) - (thickWarmSum / thickWarmCount))
         : 0.0;
 
-      // I6: Skeletal Bristle-Track Transverse Striation RMS
+      // I6: Skeletal Bristle-Track Transverse Striation RMS & B1/B2/B3/B4/B5 Brush Physics Metrics
       let sumTransDiffSq = 0.0;
       let countTransDiff = 0;
+      let sumLongDiffSq = 0.0;
+      let countLongDiff = 0;
+      let coreZoneDarkSum = 0.0, coreZoneCount = 0;
+      let mantleZoneDarkSum = 0.0, mantleZoneCount = 0;
+      let cefengTipDarkSum = 0.0, cefengBellyDarkSum = 0.0, cefengSampleCount = 0;
+      let cefengWidthAsymSum = 0.0;
+
       for (let i = 2; i < stopIdx - 1; i += 2) {
         const p = pts[i];
+        const pNext = pts[Math.min(stopIdx - 1, i + 2)];
         const halfW = Math.max(3.5, 0.46 * contourW[i] - 1.2);
+        const coreRadPx = Math.max(2.6, (p.coreMantleRadiusFrac ?? 0.45) * halfW);
+        const bias = p.cefengBias ?? 0.0;
+        const rLHere = Math.hypot(p.lx - p.x, p.ly - p.y);
+        const rRHere = Math.hypot(p.rx - p.x, p.ry - p.y);
+        if (Math.abs(bias) > 0.015) {
+          cefengWidthAsymSum += Math.abs(rLHere - rRHere) / Math.max(1.0, rLHere + rRHere);
+        }
+
         for (let s = -halfW; s <= halfW - 1.0; s += 1.0) {
-          if (Math.abs(s) < 2.6 && Math.abs(s + 1.0) < 2.6) continue;
+          const absS = Math.abs(s);
           const qx1 = Math.round(p.x + p.nx * s);
           const qy1 = Math.round(p.y + p.ny * s);
           const qx2 = Math.round(p.x + p.nx * (s + 1.0));
@@ -1368,13 +1390,88 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
             const lum2 = 0.299 * imgRaw[idx2] + 0.587 * imgRaw[idx2 + 1] + 0.114 * imgRaw[idx2 + 2];
             const d1 = (a1 / 255.0) * (255.0 - lum1);
             const d2 = (a2 / 255.0) * (255.0 - lum2);
-            const diff = d2 - d1;
-            sumTransDiffSq += diff * diff;
-            countTransDiff++;
+
+            // B1: Jianhao (兼毫) stiff inner core vs. compliant goat-hair mid-mantle darkness (excluding outer contact rim)
+            if (absS <= Math.min(2.4, coreRadPx * 0.85)) {
+              coreZoneDarkSum += d1;
+              coreZoneCount++;
+            } else if (absS > coreRadPx * 0.90 && absS <= halfW * 0.80) {
+              const aRimCheck = Math.min(
+                imgRaw[(Math.max(0, qy1 - 3) * 792 + qx1) * 4 + 3],
+                imgRaw[(Math.min(791, qy1 + 3) * 792 + qx1) * 4 + 3],
+                imgRaw[(qy1 * 792 + Math.max(0, qx1 - 3)) * 4 + 3],
+                imgRaw[(qy1 * 792 + Math.min(791, qx1 + 3)) * 4 + 3]
+              );
+              if (aRimCheck >= 95) {
+                mantleZoneDarkSum += d1;
+                mantleZoneCount++;
+              }
+            }
+
+            // B2: Zhongfeng (中鋒) vs. Cefeng (側鋒) oblique tip-side vs. belly-side darkness
+            if (Math.abs(bias) > 0.015 && absS >= 2.8 && absS <= halfW * 0.86) {
+              if (s * bias > 0) {
+                cefengTipDarkSum += d1;
+                cefengSampleCount++;
+              } else if (s * bias < 0) {
+                cefengBellyDarkSum += d1;
+              }
+            }
+
+            if (absS >= 2.6 || Math.abs(s + 1.0) >= 2.6) {
+              const diff = d2 - d1;
+              sumTransDiffSq += diff * diff;
+              countTransDiff++;
+
+              // B5: Longitudinal streamline difference at matching normalized v = s / halfW
+              const sNext = (s / halfW) * Math.max(3.5, 0.46 * contourW[Math.min(stopIdx - 1, i + 2)] - 1.2);
+              const lxNext = Math.round(pNext.x + pNext.nx * sNext);
+              const lyNext = Math.round(pNext.y + pNext.ny * sNext);
+              if (lxNext >= 0 && lxNext < 792 && lyNext >= 0 && lyNext < 792) {
+                const idxL = (lyNext * 792 + lxNext) * 4;
+                const aL = imgRaw[idxL + 3];
+                if (aL >= 120) {
+                  const lumL = 0.299 * imgRaw[idxL] + 0.587 * imgRaw[idxL + 1] + 0.114 * imgRaw[idxL + 2];
+                  const dL = (aL / 255.0) * (255.0 - lumL);
+                  const stepLen = Math.max(1.0, Math.hypot(lxNext - qx1, lyNext - qy1));
+                  const lDiff = (dL - d1) / stepLen;
+                  sumLongDiffSq += lDiff * lDiff;
+                  countLongDiff++;
+                }
+              }
+            }
           }
         }
       }
       const i6BristleStriationRms = countTransDiff > 0 ? Math.sqrt(sumTransDiffSq / countTransDiff) : 0.0;
+      const longStreamlineRms = countLongDiff > 0 ? Math.sqrt(sumLongDiffSq / countLongDiff) : 0.5;
+
+      // B1: Jianhao Core-to-Mantle Darkness Delta (Chu & Tai 2002/2004; WetBrush 2015; Yu et al. 2003)
+      const coreRefMean = coreZoneCount > 0 ? (coreZoneDarkSum / coreZoneCount) : (coreDarkSum / Math.max(1, coreCount));
+      const mantleRefMean = mantleZoneCount >= 4 ? (mantleZoneDarkSum / mantleZoneCount) : refTroughMean;
+      const b1CoreMantleDelta = coreRefMean - mantleRefMean;
+
+      // B2: Cefeng Oblique Posture & Edge Asymmetry Index (Xie et al. 2013; Chu & Tai 2002/2004; Xu et al. 2004)
+      let maxAbsCefeng = 0.0;
+      let maxTuftStepRad = 0.0;
+      let sumPlasticityResp = 0.0;
+      for (let i = 0; i < numPts; i++) {
+        const cb = Math.abs(pts[i].cefengBias ?? 0.0);
+        if (cb > maxAbsCefeng) maxAbsCefeng = cb;
+        sumPlasticityResp += Math.abs(pts[i].plasticLag ?? 0.0) + 0.35 * Math.abs(pts[i].tuftObliqueness ?? 0.0);
+        if (i > 0) {
+          const stepRad = Math.abs((pts[i].tuftObliqueness ?? 0.0) - (pts[i - 1].tuftObliqueness ?? 0.0));
+          if (stepRad > maxTuftStepRad) maxTuftStepRad = stepRad;
+        }
+      }
+      const cefengDarkDelta = cefengSampleCount > 0
+        ? Math.abs((cefengTipDarkSum - cefengBellyDarkSum) / cefengSampleCount)
+        : 0.0;
+      const b2CefengAsymmetryIndex = cefengDarkDelta + 12.0 * maxAbsCefeng + 8.0 * (cefengWidthAsymSum / Math.max(1, stopIdx / 2));
+
+      // B3: Elastica Spine Bending Lag & Wet Tuft Plasticity Response (Chu & Tai 2002/2004; Baxter & Lin 2004)
+      const b3ElasticaPlasticityResponse = (sumPlasticityResp / Math.max(1, numPts)) + 0.25 * maxAbsCefeng;
+      const b3MaxTuftStepRad = maxTuftStepRad;
 
       // I7: Calligraphic Dwell & Pause Pooling Enrichment (80th percentile dwell vs. median mid-shaft)
       dwellDarkSamples.sort((a, b) => a - b);
@@ -1386,6 +1483,13 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         ? shaftDarkSamples[Math.floor(shaftDarkSamples.length * 0.50)]
         : refTroughMean;
       const i7DwellPoolEnrichment = dwellP80 - shaftP50;
+
+      // B4: WetBrush Inter-Hair Compression Squeeze-Out & Axial Reservoir Depletion (Chen et al. 2015 Eqs. 12-14; Strassmann 1986)
+      const wetDepletionDelta = Math.max(0.0, (pts[0].tuftWetness ?? 0.94) - (pts[numPts - 1].tuftWetness ?? 0.75));
+      const b4CompressionSqueezeContrast = Math.max(0.0, i7DwellPoolEnrichment) + 18.0 * wetDepletionDelta;
+
+      // B5: Capillary Meniscus Sub-Tuft Splitting & Longitudinal Bristle Streamline Coherence (Xu et al. 2006; Strassmann 1986)
+      const b5StreamlineCoherenceRatio = i6BristleStriationRms / Math.max(0.15, longStreamlineRms);
 
       // Package stroke evaluation
       const strokeEvalObj = {
@@ -1441,6 +1545,12 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
         i6_bristle_striation_rms: Number(i6BristleStriationRms.toFixed(2)),
         i7_dwell_pool_enrichment: Number(i7DwellPoolEnrichment.toFixed(2)),
         i8_crossing_layer_darkening: 0.0,
+        b1_core_mantle_darkness_delta: Number(b1CoreMantleDelta.toFixed(2)),
+        b2_cefeng_asymmetry_index: Number(b2CefengAsymmetryIndex.toFixed(2)),
+        b3_elastica_plasticity_response: Number(b3ElasticaPlasticityResponse.toFixed(3)),
+        b3_max_tuft_step_rad: Number(b3MaxTuftStepRad.toFixed(3)),
+        b4_compression_squeeze_contrast: Number(b4CompressionSqueezeContrast.toFixed(2)),
+        b5_streamline_coherence_ratio: Number(b5StreamlineCoherenceRatio.toFixed(2)),
       };
 
       strokeEvals.push(strokeEvalObj);
@@ -1676,8 +1786,30 @@ def evaluate_ink_physics_defects(stroke: dict[str, Any]) -> dict[str, bool]:
     }
 
 
+def evaluate_brush_physics_defects(stroke: dict[str, Any]) -> dict[str, bool]:
+    """Checks whether a stroke violates physical traditional Chinese brush quality thresholds B1-B5."""
+    return {
+        "B1_jianhao_core_mantle": (
+            stroke.get("b1_core_mantle_darkness_delta", 0.0) < THRESHOLDS["b1_min_core_mantle_darkness_delta"]
+        ),
+        "B2_cefeng_oblique_asymmetry": (
+            stroke.get("b2_cefeng_asymmetry_index", 0.0) < THRESHOLDS["b2_min_cefeng_asymmetry_index"]
+        ),
+        "B3_elastica_plasticity_pore": (
+            stroke.get("b3_elastica_plasticity_response", 0.0) < THRESHOLDS["b3_min_elastica_plasticity_response"]
+            or stroke.get("b3_max_tuft_step_rad", 0.0) > THRESHOLDS["b3_max_tuft_step_rad"]
+        ),
+        "B4_wetbrush_reservoir_squeeze": (
+            stroke.get("b4_compression_squeeze_contrast", 0.0) < THRESHOLDS["b4_min_compression_squeeze_contrast"]
+        ),
+        "B5_meniscus_split_coherence": (
+            stroke.get("b5_streamline_coherence_ratio", 0.0) < THRESHOLDS["b5_min_streamline_coherence_ratio"]
+        ),
+    }
+
+
 def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
-    """Checks whether a stroke violates thresholds across brushwork metrics M1-M12 and ink physics metrics I1-I8."""
+    """Checks whether a stroke violates thresholds across brushwork metrics M1-M12, ink physics metrics I1-I8, and brush physics metrics B1-B5."""
     defects = {
         "M1_folds": (
             stroke["m1_retrograde_steps"] >= THRESHOLDS["m1_retrograde_steps"]
@@ -1740,6 +1872,8 @@ def evaluate_defects(stroke: dict[str, Any]) -> dict[str, bool]:
     }
     if "i1_interior_darkness_std" in stroke:
         defects.update(evaluate_ink_physics_defects(stroke))
+    if "b1_core_mantle_darkness_delta" in stroke:
+        defects.update(evaluate_brush_physics_defects(stroke))
     return defects
 
 
@@ -1775,6 +1909,11 @@ def print_evaluation_summary(
         "I6_bristle_striations": 0,
         "I7_dwell_pooling": 0,
         "I8_multi_stroke_km_glaze": 0,
+        "B1_jianhao_core_mantle": 0,
+        "B2_cefeng_oblique_asymmetry": 0,
+        "B3_elastica_plasticity_pore": 0,
+        "B4_wetbrush_reservoir_squeeze": 0,
+        "B5_meniscus_split_coherence": 0,
     }
     hook_strokes_total = 0
     tapered_strokes_total = 0
@@ -1836,6 +1975,16 @@ def print_evaluation_summary(
                     details.append(f"I7(dwell_pool={s.get('i7_dwell_pool_enrichment', 0):.2f})")
                 if defects.get("I8_multi_stroke_km_glaze"):
                     details.append(f"I8(cross_dark={s.get('i8_crossing_layer_darkening', 0):.2f})")
+                if defects.get("B1_jianhao_core_mantle"):
+                    details.append(f"B1(core_mantle={s.get('b1_core_mantle_darkness_delta', 0):.2f})")
+                if defects.get("B2_cefeng_oblique_asymmetry"):
+                    details.append(f"B2(cefeng_asym={s.get('b2_cefeng_asymmetry_index', 0):.2f})")
+                if defects.get("B3_elastica_plasticity_pore"):
+                    details.append(f"B3(plast={s.get('b3_elastica_plasticity_response', 0):.3f}, step={s.get('b3_max_tuft_step_rad', 0):.3f})")
+                if defects.get("B4_wetbrush_reservoir_squeeze"):
+                    details.append(f"B4(squeeze={s.get('b4_compression_squeeze_contrast', 0):.2f})")
+                if defects.get("B5_meniscus_split_coherence"):
+                    details.append(f"B5(coherence={s.get('b5_streamline_coherence_ratio', 0):.2f})")
                 defective_strokes.append({
                     "char": char,
                     "strokeIndex": s["strokeIndex"],
@@ -1935,6 +2084,11 @@ def print_evaluation_summary(
         ("I6: Skeletal Bristle-Track Striations & Feibai Coupling", defect_counts["I6_bristle_striations"], total_strokes_all),
         ("I7: Calligraphic Dwell & Pause Pooling Enrichment", defect_counts["I7_dwell_pooling"], total_strokes_all),
         ("I8: Multi-Stroke Kubelka-Munk Optical Layering at Crossings", defect_counts["I8_multi_stroke_km_glaze"], crossing_strokes_total if crossing_strokes_total else 1),
+        ("B1: Jianhao (兼毫) Core-to-Mantle Radial Tonal Hierarchy", defect_counts["B1_jianhao_core_mantle"], total_strokes_all),
+        ("B2: Zhongfeng/Cefeng (中鋒/側鋒) Oblique Posture Asymmetry", defect_counts["B2_cefeng_oblique_asymmetry"], total_strokes_all),
+        ("B3: Elastica Spine Bending Lag, Wet Plasticity & Pore Pinning", defect_counts["B3_elastica_plasticity_pore"], total_strokes_all),
+        ("B4: WetBrush Inter-Hair Compression Squeeze & Depletion", defect_counts["B4_wetbrush_reservoir_squeeze"], total_strokes_all),
+        ("B5: Capillary Meniscus Splitting & Bristle Streamline Coherence", defect_counts["B5_meniscus_split_coherence"], total_strokes_all),
     ]
 
     for label, count, denom in metric_names:

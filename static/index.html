@@ -113,6 +113,7 @@
             <button type="button" class="btn-ink-preset" data-preset="raw_xuan">特浄皮・強滲み</button>
             <button type="button" class="btn-ink-preset" data-preset="sized_feibai">礬水熟宣・飛白</button>
             <button type="button" class="btn-ink-preset" data-preset="light_wash">淡墨・水暈</button>
+            <button type="button" class="btn-ink-preset" data-preset="jianhao_cefeng">兼毫・側鋒抑揚</button>
           </div>
           <div class="ink-slider-grid">
             <label class="ink-slider-item" title="青檀・楮繊維束の凹凸および竹簾目による墨粒子の谷間沈着強度">
@@ -149,6 +150,26 @@
               <span class="ink-slider-name">膠・煤コロイド暖色差</span>
               <input type="range" class="ink-physics-slider" data-param="glueChromaticWarmth" min="0" max="2.2" step="0.05" value="1.25">
               <span class="ink-slider-val" data-val-for="glueChromaticWarmth">1.25</span>
+            </label>
+            <label class="ink-slider-item" title="兼毫筆における剛毛の柱心（芯毛）と柔毛の被毫（外套毛）の墨量・階層対比">
+              <span class="ink-slider-name">兼毫・柱心と被毫対比</span>
+              <input type="range" class="ink-physics-slider" data-param="coreMantleContrast" min="0" max="2.2" step="0.05" value="1.35">
+              <span class="ink-slider-val" data-val-for="coreMantleContrast">1.35</span>
+            </label>
+            <label class="ink-slider-item" title="中鋒（直筆）と側鋒（偏鋒）における半楕円断面変形および鋒先側・腹側の濃淡非対称度">
+              <span class="ink-slider-name">中鋒・側鋒の非対称度</span>
+              <input type="range" class="ink-physics-slider" data-param="cefengObliqueIntensity" min="0" max="2.2" step="0.05" value="1.30">
+              <span class="ink-slider-val" data-val-for="cefengObliqueIntensity">1.30</span>
+            </label>
+            <label class="ink-slider-item" title="筆毫エラスティカ曲げ弾性と湿潤毛管ヒステリシス（転折・折筆後の塑性記憶）および紙面細孔抵抗">
+              <span class="ink-slider-name">穂先弾性・湿潤塑性記憶</span>
+              <input type="range" class="ink-physics-slider" data-param="tuftPlasticityElasticity" min="0" max="2.2" step="0.05" value="1.25">
+              <span class="ink-slider-val" data-val-for="tuftPlasticityElasticity">1.25</span>
+            </label>
+            <label class="ink-slider-item" title="WetBrush毛束間隙モデルの腹肚含墨量および按圧・頓筆時の墨液搾出強度">
+              <span class="ink-slider-name">腹肚含墨・按圧搾出度</span>
+              <input type="range" class="ink-physics-slider" data-param="reservoirCompressionSqueeze" min="0" max="2.2" step="0.05" value="1.35">
+              <span class="ink-slider-val" data-val-for="reservoirCompressionSqueeze">1.35</span>
             </label>
             <label class="ink-slider-item" title="長大な左払い・右払い等の終筆部における穂先割れ・飛白（かすれ）量">
               <span class="ink-slider-name">払いの渇筆・飛白量</span>

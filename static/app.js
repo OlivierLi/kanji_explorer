@@ -665,14 +665,19 @@ const DEFAULT_SLENDER_PHYSICS = {
   bristleStriationIntensity: 1.35,
   dwellPoolingIntensity: 1.40,
   kmTransmittanceContrast: 1.35,
-  glueChromaticWarmth: 1.25
+  glueChromaticWarmth: 1.25,
+  // Physically-based traditional Chinese brush (Jianhao tuft, Cefeng posture, Elastica plasticity, WetBrush reservoir)
+  coreMantleContrast: 1.35,
+  cefengObliqueIntensity: 1.30,
+  tuftPlasticityElasticity: 1.25,
+  reservoirCompressionSqueeze: 1.35
 };
 
 const SLENDER_PHYSICS = { ...DEFAULT_SLENDER_PHYSICS };
 
 const INK_PHYSICS_PRESETS = {
   standard: {
-    label: "標準（生宣・松煙墨）",
+    label: "標準（生宣・兼毫中鋒）",
     values: { ...DEFAULT_SLENDER_PHYSICS }
   },
   raw_xuan: {
@@ -686,6 +691,10 @@ const INK_PHYSICS_PRESETS = {
       dwellPoolingIntensity: 1.75,
       kmTransmittanceContrast: 1.55,
       glueChromaticWarmth: 1.45,
+      coreMantleContrast: 1.45,
+      cefengObliqueIntensity: 1.35,
+      tuftPlasticityElasticity: 1.30,
+      reservoirCompressionSqueeze: 1.65,
       kasureAmount: 0.26
     }
   },
@@ -700,6 +709,10 @@ const INK_PHYSICS_PRESETS = {
       dwellPoolingIntensity: 1.25,
       kmTransmittanceContrast: 1.50,
       glueChromaticWarmth: 1.15,
+      coreMantleContrast: 1.75,
+      cefengObliqueIntensity: 1.60,
+      tuftPlasticityElasticity: 1.55,
+      reservoirCompressionSqueeze: 1.20,
       kasureAmount: 0.45
     }
   },
@@ -714,7 +727,29 @@ const INK_PHYSICS_PRESETS = {
       dwellPoolingIntensity: 1.65,
       kmTransmittanceContrast: 1.85,
       glueChromaticWarmth: 1.65,
+      coreMantleContrast: 1.60,
+      cefengObliqueIntensity: 1.40,
+      tuftPlasticityElasticity: 1.35,
+      reservoirCompressionSqueeze: 1.50,
       kasureAmount: 0.34
+    }
+  },
+  jianhao_cefeng: {
+    label: "兼毫・側鋒抑揚（筆勢強調）",
+    values: {
+      ...DEFAULT_SLENDER_PHYSICS,
+      paperGrainIntensity: 1.45,
+      coffeeRingIntensity: 1.55,
+      nijimiIntensity: 1.45,
+      bristleStriationIntensity: 1.65,
+      dwellPoolingIntensity: 1.60,
+      kmTransmittanceContrast: 1.45,
+      glueChromaticWarmth: 1.35,
+      coreMantleContrast: 1.85,
+      cefengObliqueIntensity: 1.85,
+      tuftPlasticityElasticity: 1.75,
+      reservoirCompressionSqueeze: 1.75,
+      kasureAmount: 0.35
     }
   }
 };
@@ -1377,6 +1412,140 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     rawPoolWeight[i] = poolWeight;
   }
 
+  // ===========================================================================
+  // Virtual Chinese Brush Mechanics Pass (Chu & Tai 2002/2004; Baxter & Lin 2004;
+  // Xie et al. 2013; Xu et al. 2003/2004; Chen et al. 2015 WetBrush; Strassmann 1986)
+  // ===========================================================================
+  const coreMantleParam = SLENDER_PHYSICS.coreMantleContrast ?? 1.35;
+  const cefengParam = SLENDER_PHYSICS.cefengObliqueIntensity ?? 1.30;
+  const plasticityParam = SLENDER_PHYSICS.tuftPlasticityElasticity ?? 1.25;
+  const squeezeParam = SLENDER_PHYSICS.reservoirCompressionSqueeze ?? 1.35;
+  const nibRad = ((SLENDER_PHYSICS.nibAngleDeg ?? -40) * Math.PI) / 180.0;
+
+  function wrapAnglePi(ang) {
+    let a = ang;
+    while (a > Math.PI) a -= 2.0 * Math.PI;
+    while (a < -Math.PI) a += 2.0 * Math.PI;
+    return a;
+  }
+
+  // Initial entry attack posture (Lufeng 露鋒 oblique tip attack vs. Cangfeng 藏鋒 pore-pinned entry)
+  const thetaMotion0 = Math.atan2(rawPts[0].ty, rawPts[0].tx);
+  const entryAttackDelta = wrapAnglePi(nibRad - thetaMotion0);
+  const isConcealedEntry = !!(behavior.isHorizontal || behavior.isVertical) && !behavior.isDot && !behavior.isCrownDot;
+  let psiOblique = Math.max(
+    -0.58,
+    Math.min(0.58, (isConcealedEntry ? 0.34 : 0.46) * Math.sin(entryAttackDelta) * (0.55 + 0.45 * Math.min(1.8, cefengParam)))
+  );
+  let plasticRho = 0.45 * psiOblique;
+  let wBelly = 0.96;
+  let wTip = 0.94;
+  let tuftEllipticity = 1.0 + 0.32 * Math.abs(Math.sin(psiOblique));
+  const charTuftLen = Math.max(2.2, 3.8 * (shaftRadius / Math.max(0.5, scale)));
+
+  for (let i = 0; i <= numSamples; i++) {
+    const p = rawPts[i];
+    const u = p.u;
+    const s = p.s;
+    const pLoad = 0.5 * (rawWL[i] + rawWR[i]);
+
+    if (i > 0) {
+      const pPrev = rawPts[i - 1];
+      const dsStep = Math.max(0.05, s - pPrev.s);
+      const thetaPrev = Math.atan2(pPrev.ty, pPrev.tx);
+      const thetaCur = Math.atan2(p.ty, p.tx);
+      const dTheta = wrapAnglePi(thetaCur - thetaPrev);
+
+      // Paper pore blocking lead distance L = a*t + b*u + c (Chu & Tai 2004 p. 80, Fig. 5)
+      const poreLead = Math.max(0.20, Math.min(0.86, 0.26 + 0.50 * (1.0 - Math.min(1.0, pLoad)) - 0.12 * Math.abs(Math.sin(psiOblique))));
+
+      // Xu et al. (2004) Eq. 18: Differential tuft rotation (Zhuan 轉) vs. sharp corner folding (Zhe 折)
+      let cornerKick = 0.0;
+      for (let c = 0; c < cornerFeatures.length; c++) {
+        const cf = cornerFeatures[c];
+        const distC = s - cf.s;
+        if (distC >= -1.2 && distC <= 6.5) {
+          const decayC = Math.exp(-Math.max(0.0, distC) / 3.8);
+          cornerKick += 0.24 * cf.turnSign * Math.min(1.2, cf.angle) * decayC * (0.55 + 0.45 * plasticityParam);
+        }
+      }
+
+      // Wet tuft capillary plasticity zero-shifting rho = clamp(theta', -alpha(w), alpha(w)) (Chu & Tai 2002 Sec. 4.2.3; Baxter & Lin 2004 Eq. 15)
+      const alphaWet = 0.30 * wTip * Math.min(1.75, 0.45 + 0.55 * plasticityParam);
+      plasticRho = Math.max(-alphaWet, Math.min(alphaWet, 0.80 * plasticRho + 0.20 * psiOblique));
+
+      // Quasi-static elastica restoring relaxation toward zero-shifted plastic rest angle
+      const relaxRate = Math.max(0.04, Math.min(0.46, (dsStep / (charTuftLen * poreLead)) * (0.68 + 0.32 * plasticityParam)));
+      const zhuanCoupling = 0.35 + 0.10 * Math.min(1.8, cefengParam); // Smooth curve rotation absorbs into tuft roll (Zhuan) vs. obliqueness (Cefeng)
+      psiOblique = (1.0 - relaxRate) * (psiOblique - zhuanCoupling * dTheta + cornerKick) + relaxRate * plasticRho;
+      psiOblique = Math.max(-0.82, Math.min(0.82, psiOblique));
+
+      // Cross-sectional double-half-ellipse flattening a_i / b_i (Xu et al. 2004 Eq. 18; Chu & Tai 2002 Sec. 4.1.2)
+      const targetEllip = 1.0 + 0.44 * Math.abs(Math.sin(psiOblique)) + 0.28 * Math.max(0.0, pLoad - 0.72) + 0.22 * rawPoolWeight[i];
+      tuftEllipticity = 0.72 * tuftEllipticity + 0.28 * targetEllip;
+
+      // WetBrush inter-hair packing density & spherical-cap compression release (Chen et al. 2015 Sec. 5, Eqs. 12-14)
+      const packPsi = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(Math.sin(psiOblique))));
+      const potCapMPrime = Math.max(0.22, 1.0 - 0.50 * packPsi);
+      const pClamp = Math.min(1.2, pLoad);
+      const contactCapM = potCapMPrime - 0.24 * pClamp * pClamp * (1.0 - 0.25 * pClamp);
+      const stepFrac = dsStep / Math.max(16.0, origLen);
+      const speedEst = Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, pLoad));
+      const innerStress = (pLoad * tuftEllipticity * speedEst) / Math.max(0.22, wTip);
+      const chiInteract = speedEst * innerStress * stepFrac;
+      const compSqueeze = Math.max(0.0, wBelly - contactCapM) * (0.60 + 0.40 * squeezeParam) + 0.28 * rawPoolWeight[i] * squeezeParam;
+
+      // Two-compartment axial wetness depletion & belly-to-tip capillary recharge (Xu et al. 2004 Eq. 17; Strassmann 1986)
+      wTip = Math.max(
+        0.20,
+        Math.min(1.0, wTip - 0.30 * chiInteract + 0.24 * (wBelly - wTip) + 0.10 * compSqueeze * stepFrac)
+      );
+      wBelly = Math.max(
+        0.28,
+        Math.min(1.0, wBelly - 0.14 * chiInteract - 0.07 * compSqueeze * stepFrac)
+      );
+    }
+
+    const sinPsi = Math.sin(psiOblique);
+    const cosPsi = Math.cos(psiOblique);
+    // Anisotropic pull-vs-push Coulomb friction factor eta (Baxter & Lin 2004 Eqs. 13-14; Chu & Tai 2004 p. 80)
+    const etaPull = 0.45 * Math.pow(Math.max(0.0, cosPsi), 2);
+    const anisoFriction = (1.0 - etaPull) * (0.65 + 0.35 * pLoad);
+
+    // WetBrush instantaneous compression squeeze-out & inner stress (Chen et al. 2015 Eqs. 12-14; Xu et al. 2003 Eq. 9)
+    const packHere = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(sinPsi)));
+    const capHere = Math.max(0.22, 1.0 - 0.50 * packHere) - 0.20 * Math.min(1.2, pLoad) * Math.min(1.2, pLoad);
+    const squeezeHere = (Math.max(0.0, wBelly - capHere) * 0.65 + 0.32 * rawPoolWeight[i]) * (0.55 + 0.45 * squeezeParam);
+    const speedHere = Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, pLoad));
+    const stressHere = (pLoad * tuftEllipticity * speedHere) / Math.max(0.22, wTip);
+
+    // Jianhao (兼毫) stiff rabbit/weasel inner core vs. compliant goat-hair outer mantle contact fraction (Chu & Tai 2002 Sec. 3)
+    const coreFracHere = Math.max(
+      0.34,
+      Math.min(0.58, 0.46 - 0.08 * (pLoad - 0.80) + 0.05 * (1.0 - wTip) + 0.03 * (coreMantleParam - 1.35))
+    );
+
+    // Area/width-conserving Zhongfeng (中鋒) vs. Cefeng (側鋒) double-half-ellipse lateral shift
+    // Preserves rawWL[i] + rawWR[i] exactly while shifting the stiff tip toward one boundary and the soft belly toward the other
+    const uStartFade = u < 0.06 ? (u / 0.06) * (u / 0.06) * (3.0 - 2.0 * (u / 0.06)) : 1.0;
+    const uEndFade = u > 0.90 ? ((1.0 - u) / 0.10) * ((1.0 - u) / 0.10) * (3.0 - 2.0 * ((1.0 - u) / 0.10)) : 1.0;
+    const wTot = rawWL[i] + rawWR[i];
+    const cefengShift = Math.max(-0.095, Math.min(0.095, 0.075 * cefengParam * sinPsi * uStartFade * uEndFade));
+    rawWL[i] = Math.max(0.08, rawWL[i] - 0.5 * wTot * cefengShift);
+    rawWR[i] = Math.max(0.08, wTot - rawWL[i]);
+
+    p.tuftObliqueness = psiOblique;
+    p.cefengBias = sinPsi * (0.35 + 0.50 * Math.min(1.8, cefengParam));
+    p.plasticLag = plasticRho;
+    p.tuftEllipticity = tuftEllipticity;
+    p.tuftWetness = wTip;
+    p.bellyReservoir = wBelly;
+    p.compressionSqueeze = squeezeHere;
+    p.tuftStress = stressHere;
+    p.coreMantleRadiusFrac = coreFracHere;
+    p.anisoFriction = anisoFriction;
+  }
+
   // Curvature-clamped inner offset
   const clampedRL = new Float32Array(numSamples + 1);
   const clampedRR = new Float32Array(numSamples + 1);
@@ -1683,7 +1852,8 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     hookFeature,
     cornerFeatures: evalCornerFeatures,
     boxSize,
-    sweepStartU: 0.43
+    sweepStartU: 0.43,
+    _brushCompileKey: `${coreMantleParam}_${cefengParam}_${plasticityParam}_${squeezeParam}_${SLENDER_PHYSICS.kasureAmount ?? 0.30}`
   };
 }
 
@@ -1886,8 +2056,8 @@ function generateKasureSlitsPath(compiled, limitIdx) {
       const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
       const halfW = Math.max(0.12, localWidth * ch.widthFrac * env * 0.5);
 
-      const bx = p1.lx + (p1.rx - p1.lx) * ch.lat;
-      const by = p1.ly + (p1.ry - p1.ly) * ch.lat;
+      const bx = p1.lx + (p1.rx - p1.lx) * Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
+      const by = p1.ly + (p1.ry - p1.ly) * Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
 
       rPts.push({ x: bx - p1.nx * halfW, y: by - p1.ny * halfW });
       lPts.push({ x: bx + p1.nx * halfW, y: by + p1.ny * halfW });
@@ -2570,10 +2740,12 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
       const alpha = 0.55 * Math.pow(Math.sin(Math.min(1.0, t / 0.30) * (Math.PI * 0.5)), 1.8);
       ctx.strokeStyle = "rgba(0, 0, 0, " + alpha.toFixed(3) + ")";
 
-      const b1x = p1.lx + (p1.rx - p1.lx) * ch.lat;
-      const b1y = p1.ly + (p1.ry - p1.ly) * ch.lat;
-      const b2x = p2.lx + (p2.rx - p2.lx) * ch.lat;
-      const b2y = p2.ly + (p2.ry - p2.ly) * ch.lat;
+      const lat1 = Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
+      const lat2 = Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p2.cefengBias || 0.0)));
+      const b1x = p1.lx + (p1.rx - p1.lx) * lat1;
+      const b1y = p1.ly + (p1.ry - p1.ly) * lat1;
+      const b2x = p2.lx + (p2.rx - p2.lx) * lat2;
+      const b2y = p2.ly + (p2.ry - p2.ly) * lat2;
 
       ctx.beginPath();
       ctx.moveTo(b1x, b1y);
@@ -2664,6 +2836,85 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const dwellInt = phys.dwellPoolingIntensity ?? 1.40;
   const kmContrast = phys.kmTransmittanceContrast ?? 1.35;
   const glueWarmth = phys.glueChromaticWarmth ?? 1.25;
+  const coreMantleInt = phys.coreMantleContrast ?? 1.35;
+  const cefengInt = phys.cefengObliqueIntensity ?? 1.30;
+  const plasticityInt = phys.tuftPlasticityElasticity ?? 1.25;
+  const squeezeInt = phys.reservoirCompressionSqueeze ?? 1.35;
+
+  // Pre-step 48x48 Virtual Chinese Brush Bristle Array & Capillary Meniscus Split Map
+  // (Strassmann 1986 Sec. 4.1-4.4; Chu & Tai 2004 Split/Dry Map; Chen et al. 2015 WetBrush Eqs. 12-14; Xu et al. 2004 Eqs. 5, 17, 20)
+  const N_BRUSH = 48;
+  const uCefengLut = new Float32Array(N_BRUSH);
+  const uWetnessLut = new Float32Array(N_BRUSH);
+  const uSqueezeLut = new Float32Array(N_BRUSH);
+  const uStressLut = new Float32Array(N_BRUSH);
+  const uCoreFracLut = new Float32Array(N_BRUSH);
+  const uPlasticLut = new Float32Array(N_BRUSH);
+  const bristleLut = new Float32Array(N_BRUSH * N_BRUSH);
+
+  const maxPtIdx = Math.max(1, limitIdx);
+  for (let k = 0; k < N_BRUSH; k++) {
+    const fPt = (k / (N_BRUSH - 1)) * maxPtIdx;
+    const idxA = Math.min(maxPtIdx, Math.floor(fPt));
+    const idxB = Math.min(maxPtIdx, idxA + 1);
+    const fr = fPt - idxA;
+    const ptA = pts[idxA];
+    const ptB = pts[idxB];
+    uCefengLut[k] = (ptA.cefengBias ?? 0.0) + fr * ((ptB.cefengBias ?? 0.0) - (ptA.cefengBias ?? 0.0));
+    uWetnessLut[k] = (ptA.tuftWetness ?? 0.88) + fr * ((ptB.tuftWetness ?? 0.88) - (ptA.tuftWetness ?? 0.88));
+    uSqueezeLut[k] = (ptA.compressionSqueeze ?? 0.32) + fr * ((ptB.compressionSqueeze ?? 0.32) - (ptA.compressionSqueeze ?? 0.32));
+    uStressLut[k] = (ptA.tuftStress ?? 0.65) + fr * ((ptB.tuftStress ?? 0.65) - (ptA.tuftStress ?? 0.65));
+    uCoreFracLut[k] = (ptA.coreMantleRadiusFrac ?? 0.45) + fr * ((ptB.coreMantleRadiusFrac ?? 0.45) - (ptA.coreMantleRadiusFrac ?? 0.45));
+    uPlasticLut[k] = Math.abs(ptA.plasticLag ?? 0.0) + fr * (Math.abs(ptB.plasticLag ?? 0.0) - Math.abs(ptA.plasticLag ?? 0.0));
+  }
+
+  // Evolve 1D cellular bristle reservoirs across u in [0, 1] with arcsin(|v|) contact thresholds & meniscus diffusion
+  const bState = new Float32Array(N_BRUSH);
+  const bNext = new Float32Array(N_BRUSH);
+  const strokeSeed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233 + pts[maxPtIdx].x * 37.719) * 43758.5453);
+  for (let m = 0; m < N_BRUSH; m++) {
+    const vNorm = -1.0 + (2.0 * m) / (N_BRUSH - 1);
+    const absV = Math.abs(vNorm);
+    const clusterWave = 0.55 * Math.sin(6.5 * Math.PI * vNorm + (strokeSeed % 6.28)) + 0.45 * Math.cos(11.0 * Math.PI * vNorm - (strokeSeed % 3.14));
+    const inCore = absV <= uCoreFracLut[0];
+    // Strassmann (1986) "short-changed" initial bristle ink reservoirs: core bristles start fuller than outer goat-hair mantle
+    bState[m] = inCore ? (0.90 + 0.08 * clusterWave) : (0.74 + 0.18 * clusterWave);
+  }
+
+  for (let k = 0; k < N_BRUSH; k++) {
+    const wCur = uWetnessLut[k];
+    const biasCur = uCefengLut[k];
+    const sqCur = uSqueezeLut[k];
+    const strCur = uStressLut[k];
+    const coreR = uCoreFracLut[k];
+    // Capillary meniscus bridge diffusivity D_cap increases when brush is soaked (dilating tracks) and weakens as tuft dries
+    const dCap = Math.min(0.32, 0.22 * wCur * wCur);
+    let meanRow = 0.0;
+    for (let m = 0; m < N_BRUSH; m++) {
+      const vNorm = -1.0 + (2.0 * m) / (N_BRUSH - 1);
+      const absV = Math.abs(vNorm);
+      // Strassmann (1986) Sec. 4.4 round-tuft contact threshold: P_thresh(v) = (2/pi)*arcsin(|v|)
+      const pThresh = (2.0 / Math.PI) * Math.asin(Math.min(1.0, absV));
+      const leftQ = bState[Math.max(0, m - 1)];
+      const rightQ = bState[Math.min(N_BRUSH - 1, m + 1)];
+      let qVal = (1.0 - dCap) * bState[m] + 0.5 * dCap * (leftQ + rightQ);
+      // Strassmann Sec. 4.3 "ink stealing" from wet adjacent bristle clusters
+      if (qVal < 0.45 && (leftQ > 0.68 || rightQ > 0.68)) {
+        qVal += 0.06 * (Math.max(leftQ, rightQ) - qVal);
+      }
+      // Depletion higher on outer mantle and on dragged Cefeng belly side (vNorm * biasCur < 0)
+      const depRate = 0.012 * strCur * (0.85 + 0.45 * pThresh - 0.25 * biasCur * vNorm);
+      const sqRecharge = 0.010 * sqCur * (absV <= coreR ? 1.15 : 0.70);
+      bNext[m] = Math.max(0.20, Math.min(1.10, qVal - depRate + sqRecharge));
+      meanRow += bNext[m];
+    }
+    meanRow /= N_BRUSH;
+    const rowOff = k * N_BRUSH;
+    for (let m = 0; m < N_BRUSH; m++) {
+      bState[m] = bNext[m];
+      bristleLut[rowOff + m] = bNext[m] - meanRow;
+    }
+  }
 
   const imgData = ctx.getImageData(x0, y0, bw, bh);
   const data = imgData.data;
@@ -2740,9 +2991,15 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       const du = uMid - 0.68;
       qSeg += 0.24 * Math.exp(-(du * du) / 0.014);
     }
+    // WetBrush inter-hair compression squeeze-out & Elastica fold plasticity enrichment
+    // (Chen et al. 2015 Sec. 5, Eqs. 12-14; Chu & Tai 2004 p. 79; Xu et al. 2003 Eq. 9)
+    const segSqueeze = 0.5 * ((pA.compressionSqueeze ?? 0.30) + (pB.compressionSqueeze ?? 0.30));
+    const segPlastic = 0.5 * (Math.abs(pA.plasticLag ?? 0.0) + Math.abs(pB.plasticLag ?? 0.0));
+    qSeg += 0.09 * Math.max(0.0, segSqueeze - 0.26) * (0.55 + 0.45 * squeezeInt) + 0.07 * segPlastic * plasticityInt;
 
     const uA = pA.u ?? (i / Math.max(1, pts.length - 1));
     const uB = pB.u ?? ((i + 1) / Math.max(1, pts.length - 1));
+    const biasSeg = 0.5 * ((pA.cefengBias ?? 0.0) + (pB.cefengBias ?? 0.0));
 
     for (let ly = sMinY; ly <= sMaxY; ly++) {
       const rowOff = ly * bw;
@@ -2761,7 +3018,9 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
           uField[idx] = uA + t * (uB - uA);
           const wLoc = wA + t * (wB - wA);
           const signedLat = (projX * nx + projY * ny) / wLoc;
-          vField[idx] = Math.max(-1.2, Math.min(1.2, signedLat));
+          // Hsu & Lee (1994) oblique tuft cross-section skew in Cefeng posture
+          const skewedLat = signedLat + 0.06 * biasSeg * (1.0 - Math.min(1.0, signedLat * signedLat));
+          vField[idx] = Math.max(-1.2, Math.min(1.2, skewedLat));
           qField[idx] = qSeg;
         }
       }
@@ -2965,12 +3224,14 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   // 7. Optical Pigment Thickness Synthesis & Two-Flux Kubelka-Munk Layer Evaluation
   // Calibrate baseline thickness into the active KM translucent glaze slope so valleys, filaments, and rims pop visually
   const rawBase = toneMode === "vermilion" ? 0.64 : (toneMode === "dark-sumi" ? 0.62 : 0.54);
+  const coreSpineBoost = 0.056 * coreMantleInt;
   const baseThick = Math.max(0.32, Math.min(0.85, rawBase - 0.09 * (kmContrast - 1.0)));
+  const spineRefThick = Math.min(0.88, baseThick + coreSpineBoost);
   const grainAmp = (toneMode === "dark-sumi" ? 0.085 : 0.108) * grainInt * (0.75 + 0.25 * kmContrast);
   const lutScale = (km.N - 1) / km.maxX;
   const R2BaseR = km.R2[0], R2BaseG = km.R2[1], R2BaseB = km.R2[2];
 
-  // Exact numerical 2nd-order KM curvature compensation kappa2(baseThick) = -0.5 * D''(x0) / D'(x0)
+  // Exact numerical 2nd-order KM curvature compensation kappa2(spineRefThick) = -0.5 * D''(x0) / D'(x0)
   // Guarantees zero 2nd-order Jensen shift in 5x5 spine windows (M6) for any slider configuration
   function evalKmDarknessAt(xVal) {
     const fl = Math.min(km.N - 1.0001, Math.max(0.0, xVal * lutScale));
@@ -2985,9 +3246,9 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
     return aL * (1.0 - rawG);
   }
   const hStep = 0.10;
-  const d0 = evalKmDarknessAt(baseThick);
-  const dPlus = evalKmDarknessAt(baseThick + hStep);
-  const dMinus = evalKmDarknessAt(Math.max(0.05, baseThick - hStep));
+  const d0 = evalKmDarknessAt(spineRefThick);
+  const dPlus = evalKmDarknessAt(spineRefThick + hStep);
+  const dMinus = evalKmDarknessAt(Math.max(0.05, spineRefThick - hStep));
   const dPrime = (dPlus - dMinus) / (2.0 * hStep);
   const dSecond = (dPlus - 2.0 * d0 + dMinus) / (hStep * hStep);
   const kappa2 = Math.abs(dPrime) > 1e-4 ? Math.max(0.0, Math.min(2.4, -0.5 * dSecond / dPrime)) : 1.15;
@@ -3038,15 +3299,55 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         valleySign = -1.0 + 1.85 * dryFactor;
       }
 
+      // Sample Virtual Chinese Brush longitudinal state at u (Chu & Tai 2002/2004; WetBrush 2015; Xie et al. 2013)
+      const uLutF = Math.max(0.0, Math.min(N_BRUSH - 1.001, u * (N_BRUSH - 1)));
+      const uIdx0 = uLutF | 0;
+      const uFrac = uLutF - uIdx0;
+      const cefengBiasHere = uCefengLut[uIdx0] + uFrac * (uCefengLut[uIdx0 + 1] - uCefengLut[uIdx0]);
+      const coreRadiusHere = uCoreFracLut[uIdx0] + uFrac * (uCoreFracLut[uIdx0 + 1] - uCoreFracLut[uIdx0]);
+      const squeezeHere = uSqueezeLut[uIdx0] + uFrac * (uSqueezeLut[uIdx0 + 1] - uSqueezeLut[uIdx0]);
+      const plasticHere = uPlasticLut[uIdx0] + uFrac * (uPlasticLut[uIdx0 + 1] - uPlasticLut[uIdx0]);
+      const wetnessHere = uWetnessLut[uIdx0] + uFrac * (uWetnessLut[uIdx0 + 1] - uWetnessLut[uIdx0]);
+
+      // Sample evolved 48x48 Strassmann / Chu-Tai cellular bristle array at (u, v)
+      const vClamped = Math.max(-1.0, Math.min(1.0, v));
+      const vLutF = Math.max(0.0, Math.min(N_BRUSH - 1.001, (vClamped + 1.0) * 0.5 * (N_BRUSH - 1)));
+      const vIdx0 = vLutF | 0;
+      const vFrac = vLutF - vIdx0;
+      const b00 = bristleLut[uIdx0 * N_BRUSH + vIdx0];
+      const b01 = bristleLut[uIdx0 * N_BRUSH + vIdx0 + 1];
+      const b10 = bristleLut[(uIdx0 + 1) * N_BRUSH + vIdx0];
+      const b11 = bristleLut[(uIdx0 + 1) * N_BRUSH + vIdx0 + 1];
+      const bCell = (b00 + vFrac * (b01 - b00)) + uFrac * ((b10 + vFrac * (b11 - b10)) - (b00 + vFrac * (b01 - b00)));
+
       // Coherent multi-scale bristle-cluster striations along skeletal (u, v) frame
       // (Strassmann 1986 Hairy Brushes; Hsu & Lee 1994 Skeletal Strokes; Chen et al. 2015 WetBrush)
-      const bStriation =
+      const bMicro =
         0.46 * Math.sin(18.0 * v + 1.3 * u) +
         0.34 * Math.cos(31.0 * v - 1.9 * u + 0.7) +
         0.20 * Math.sin(47.0 * v + 2.4 * u - 1.1);
+      const absV = Math.abs(v);
+      // Outer goat-hair mantle (|v| > coreRadiusHere) & dragged Cefeng belly side exhibit stronger capillary bristle splitting
+      const mantleSplitBoost = absV > coreRadiusHere ? (1.0 + 0.38 * Math.min(1.0, (absV - coreRadiusHere) / 0.45)) : 0.86;
+      const bCombined = (0.72 * bMicro + 1.35 * bCell) * mantleSplitBoost * (1.08 - 0.16 * wetnessHere);
       // Couple bristle striations with Xuan paper micro-topography (wet valleys vs. dry pore-resistance peaks)
       const bristlePaperCoupling =
-        0.072 * bristleInt * bStriation * (0.55 + 0.75 * dryFactor + 0.40 * Math.abs(v)) * (1.0 + 0.70 * valleySign * (hVal - 0.5)) * wCore;
+        0.072 * bristleInt * bCombined * (0.55 + 0.75 * dryFactor + 0.40 * absV) * (1.0 + 0.70 * valleySign * (hVal - 0.5)) * wCore;
+
+      // Jianhao (兼毫) Core-to-Mantle Radial Profile (Chu & Tai 2002 Sec. 3, 2004 p. 78; Chen et al. 2015 WetBrush; Yu et al. 2003)
+      // Stiff rabbit/weasel inner core (|v| <= coreRadiusHere) delivers denser central ink than the compliant goat-hair mid-mantle
+      let jianhaoProfile = 0.0;
+      if (absV <= coreRadiusHere) {
+        const radialCoreShape = Math.cos((absV / Math.max(0.2, coreRadiusHere)) * (Math.PI * 0.5));
+        jianhaoProfile = (1.0 - wCore) * coreSpineBoost + wCore * coreSpineBoost * (0.35 + 0.65 * radialCoreShape);
+      } else if (absV < 0.88) {
+        const tMantle = (absV - coreRadiusHere) / Math.max(0.15, 0.88 - coreRadiusHere);
+        jianhaoProfile = -0.064 * coreMantleInt * Math.sin(tMantle * Math.PI) * wCore;
+      }
+
+      // Zhongfeng (中鋒) vs. Cefeng (側鋒) Tip-Edge vs. Belly-Edge Tonal & Meniscus Asymmetry
+      // (Xie et al. 2013 Sec. 4.1-4.3; Chu & Tai 2002/2004; Xu et al. 2004 Eq. 5)
+      const cefengModulation = 0.052 * cefengInt * cefengBiasHere * Math.sin(vClamped * (Math.PI * 0.5)) * wCore;
 
       // Zero-B5 cellulose fiber granulation (active everywhere, including spine core)
       const gLin = valleySign * grainAmp * gZero;
@@ -3065,13 +3366,19 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         : 0.0;
       const coffeeRing = (0.34 * ringInt * kmContrast * edgeSink * (0.62 + 0.76 * (1.0 - hVal)) + subRimDepletion) * wCore;
 
-      // Calligraphic dwell pause pooling & LBM fixed valley pigment accumulation
-      const pausePool = (0.24 * dwellInt * qField[idx] + 0.085 * dwellInt * (px[idx] - 0.28)) * wCore;
+      // Calligraphic dwell pause pooling, WetBrush compression squeeze-out, & LBM fixed valley pigment accumulation
+      // Concentrated in the brush belly/core (WetBrush Sec. 5; Chu & Tai 2002 Sec. 3) rather than flooding the mid-mantle
+      const bellyRadialWeight = 1.18 - 0.55 * Math.min(1.0, absV);
+      const squeezePool = (0.048 * squeezeInt * Math.max(0.0, squeezeHere - 0.28) + 0.036 * plasticityInt * plasticHere) * bellyRadialWeight * wCore;
+      const pausePool = (0.24 * dwellInt * qField[idx] + 0.085 * dwellInt * (px[idx] - 0.28)) * bellyRadialWeight * wCore + squeezePool;
 
       // Total effective optical pigment thickness x_opt
       const xInterior = Math.max(
         0.04,
-        Math.min(km.maxX, baseThick + deltaGrainCore + filamentRelief + bristlePaperCoupling + coffeeRing + pausePool)
+        Math.min(
+          km.maxX,
+          baseThick + deltaGrainCore + filamentRelief + bristlePaperCoupling + jianhaoProfile + cefengModulation + coffeeRing + pausePool
+        )
       );
 
       // Outer percolated nijimi capillary fringe thickness from LBM density (Chu & Tai 2005 Sec. 5.3)
@@ -3191,7 +3498,7 @@ function renderPartialCompiledStroke(targetCtx, compiled, endIdx, options = {}) 
   }
 
   const p = SLENDER_PHYSICS || DEFAULT_SLENDER_PHYSICS;
-  const cacheKey = `${limit}_${toneMode}_${W}_${H}_${p.kasureAmount}_${p.paperGrainIntensity}_${p.coffeeRingIntensity}_${p.nijimiIntensity}_${p.bristleStriationIntensity}_${p.dwellPoolingIntensity}_${p.kmTransmittanceContrast}_${p.glueChromaticWarmth}`;
+  const cacheKey = `${limit}_${toneMode}_${W}_${H}_${p.kasureAmount}_${p.paperGrainIntensity}_${p.coffeeRingIntensity}_${p.nijimiIntensity}_${p.bristleStriationIntensity}_${p.dwellPoolingIntensity}_${p.kmTransmittanceContrast}_${p.glueChromaticWarmth}_${p.coreMantleContrast}_${p.cefengObliqueIntensity}_${p.tuftPlasticityElasticity}_${p.reservoirCompressionSqueeze}`;
 
   if (compiled._kmRenderCache && compiled._kmRenderCache.key === cacheKey && compiled._kmRenderCache.canvas) {
     targetCtx.save();
@@ -3265,6 +3572,8 @@ function setupCalligraphySumiCanvas(targetElement, svgElem, strokeEntries) {
   targetElement.insertBefore(canvas, svgElem);
 
   canvas._compiledStrokes = strokeEntries.map(entry => ({
+    entry,
+    totalStrokes: strokeEntries.length,
     compiled: compileStrokePhysics({
       d: entry.d,
       type: entry.type || "",
@@ -3290,6 +3599,8 @@ function refreshCalligraphySumiCanvas(rootEl = document) {
   }
   const isDark = (document.documentElement.getAttribute("data-theme") || "dark") === "dark";
   const baseTone = isDark ? "dark-sumi" : "sumi";
+  const p = SLENDER_PHYSICS || DEFAULT_SLENDER_PHYSICS;
+  const expectedCompileKey = `${p.coreMantleContrast ?? 1.35}_${p.cefengObliqueIntensity ?? 1.30}_${p.tuftPlasticityElasticity ?? 1.25}_${p.reservoirCompressionSqueeze ?? 1.35}_${p.kasureAmount ?? 0.30}`;
 
   canvases.forEach(canvas => {
     const ctx = canvas.getContext("2d");
@@ -3302,6 +3613,14 @@ function refreshCalligraphySumiCanvas(rootEl = document) {
     const fgList = [];
     const compiledStrokes = canvas._compiledStrokes || [];
     compiledStrokes.forEach(item => {
+      if (item.entry && (!item.compiled || item.compiled._brushCompileKey !== expectedCompileKey)) {
+        item.compiled = compileStrokePhysics({
+          d: item.entry.d,
+          type: item.entry.type || "",
+          component: item.entry.component || "",
+          index: item.entry.index || 1
+        }, 0, 0, 792, item.totalStrokes || compiledStrokes.length);
+      }
       const pathEl = item.pathEl;
       const isActive = pathEl && (pathEl.classList.contains("active-stroke") || (pathEl.closest && !!pathEl.closest(".kvg-group.hovered")));
       const inLock = pathEl && pathEl.closest && !!pathEl.closest(".kvg-group.locked-scope");
@@ -5278,6 +5597,10 @@ const INK_PHYSICS_PARAM_KEYS = [
   "dwellPoolingIntensity",
   "kmTransmittanceContrast",
   "glueChromaticWarmth",
+  "coreMantleContrast",
+  "cefengObliqueIntensity",
+  "tuftPlasticityElasticity",
+  "reservoirCompressionSqueeze",
   "kasureAmount"
 ];
 
