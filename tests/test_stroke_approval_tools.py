@@ -139,17 +139,19 @@ def test_real_app_js_all_undecided_dry_run(
     )
     assert len(real_flags) > 0
 
-    # Ensure every flag in real static/app.js is currently false
-    for flag in real_flags:
-        assert re.search(
-            rf"^\s*{flag}\s*:\s*false", block_body, re.MULTILINE
-        ), f"Flag {flag} was expected to be false initially"
+    # Mirror the current defaults: already-enabled flags are "ok", the rest "undecided" -> nothing should change
+    enabled = {
+        flag for flag in real_flags
+        if re.search(rf"^\s*{flag}\s*:\s*true", block_body, re.MULTILINE)
+    }
 
     dec_file = tmp_path / "all_undecided.json"
     dec_file.write_text(
         json.dumps({
             "generated": "2026-11-06T12:00:00Z",
-            "decisions": {f: {"decision": "undecided", "comment": ""} for f in real_flags},
+            "decisions": {
+                f: {"decision": "ok" if f in enabled else "undecided", "comment": ""} for f in real_flags
+            },
         }),
         encoding="utf-8",
     )
