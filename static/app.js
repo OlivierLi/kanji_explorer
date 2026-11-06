@@ -1861,7 +1861,8 @@ function generateKasureSlitsPath(compiled, limitIdx) {
     return "";
   }
 
-  const kScale = (SLENDER_PHYSICS.kasureAmount || 0.30) / 0.30;
+  const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
+  if (kScale <= 0) return "";
   const kasureChannels = [
     { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
     { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
@@ -2539,7 +2540,8 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
   const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
   if (!compiled.behavior.isSweepEnd || compiled.behavior.isZiHengPie || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || origLen <= 45 || compiled.behavior.isRightNa || compiled.hookFeature || cornersCount > 1) return;
 
-  const kScale = (SLENDER_PHYSICS.kasureAmount || 0.30) / 0.30;
+  const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
+  if (kScale <= 0) return;
   const kasureChannels = [
     { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
     { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
@@ -3120,7 +3122,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       } else {
         const rawEdgeAlpha = mask * alphaLayer + (1.0 - mask) * fringeAlpha;
         if (rawEdgeAlpha < 0.118) {
-          // Disorder pinning & capillary valley wicking in the outer wet-dry fringe (strictly < 30/255)
+          // Disorder pinning & capillary valley wicking in the outer wet-dry fringe (max 0.118 rounds to 30/255, below the 32 ink threshold)
           finalAlpha = Math.min(0.118, rawEdgeAlpha * Math.max(0.24, Math.min(1.38, 1.46 - 0.96 * hVal)));
         } else {
           finalAlpha = Math.min(0.97, rawEdgeAlpha);
@@ -5310,13 +5312,28 @@ function syncInkPhysicsSettingsUI(activePresetKey = undefined) {
   });
 }
 
-function redrawAllInkPhysicsCanvases() {
+function redrawAllInkPhysicsCanvasesNow() {
   if (document.getElementById("canvasSvgContainer")) {
     refreshCalligraphySumiCanvas();
   }
   if (typeof window !== "undefined" && typeof window.renderAllAuditCanvases === "function") {
     window.renderAllAuditCanvases();
   }
+}
+
+let inkRedrawFrameHandle = null;
+
+// Coalesce rapid slider `input` events into at most one expensive redraw per animation frame
+function redrawAllInkPhysicsCanvases() {
+  if (typeof requestAnimationFrame !== "function") {
+    redrawAllInkPhysicsCanvasesNow();
+    return;
+  }
+  if (inkRedrawFrameHandle !== null) return;
+  inkRedrawFrameHandle = requestAnimationFrame(() => {
+    inkRedrawFrameHandle = null;
+    redrawAllInkPhysicsCanvasesNow();
+  });
 }
 
 function applyInkPhysicsPreset(presetKey) {

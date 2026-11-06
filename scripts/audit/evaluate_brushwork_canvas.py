@@ -29,6 +29,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -1591,6 +1592,15 @@ def build_evaluation_html(char_stroke_map: dict[str, list[dict[str, Any]]], app_
 </html>"""
 
 
+def find_chrome_binary() -> str:
+    """Returns the first available headless-capable Chrome/Chromium executable."""
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "google-chrome"
+
+
 def run_headless_evaluator(html_content: str) -> dict[str, Any]:
     """Executes evaluation HTML in headless Chrome and parses the eval-output JSON payload."""
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
@@ -1599,7 +1609,7 @@ def run_headless_evaluator(html_content: str) -> dict[str, Any]:
 
     try:
         cmd = [
-            "google-chrome",
+            find_chrome_binary(),
             "--headless",
             "--no-sandbox",
             "--disable-gpu",

@@ -2473,7 +2473,7 @@ body.audit-view {
 .ink-settings-toggle-btn {
   font-size: 0.72rem;
   padding: 3px 8px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -2490,7 +2490,7 @@ body.audit-view {
 
 .ink-physics-panel {
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   padding: 9px 11px;
   display: flex;
@@ -2533,7 +2533,7 @@ body.audit-view {
   font-size: 0.68rem;
   padding: 2px 7px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-medium);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
@@ -2562,7 +2562,7 @@ body.audit-view {
   font-size: 0.69rem;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-medium);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;

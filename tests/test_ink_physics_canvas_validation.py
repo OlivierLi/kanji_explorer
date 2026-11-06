@@ -24,6 +24,7 @@ from scripts.audit.evaluate_brushwork_canvas import (
     evaluate_defects,
     evaluate_ink_physics_defects,
     extract_strokes_for_characters,
+    find_chrome_binary,
     run_headless_evaluator,
 )
 
@@ -240,7 +241,7 @@ def test_ink_physics_sliders_and_presets_monotonic_canvas_response() -> None:
 
     try:
         proc = subprocess.run(
-            ["google-chrome", "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", f"file://{tmp_path}"],
+            [find_chrome_binary(), "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", f"file://{tmp_path}"],
             capture_output=True,
             text=True,
             check=True,
