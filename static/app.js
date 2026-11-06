@@ -906,6 +906,19 @@ function countKvgStrokes(group) {
 
 const numFmt = n => (Number.isFinite(n) ? Number(n.toFixed(2)) : 0);
 
+// Key of every slider/parameter that is baked into compileStrokePhysics() output; a mismatch forces a recompile.
+function getBrushCompileKey(phys) {
+  const p = phys || DEFAULT_SLENDER_PHYSICS;
+  return [
+    p.coreMantleContrast ?? 1.35,
+    p.cefengObliqueIntensity ?? 1.30,
+    p.tuftPlasticityElasticity ?? 1.25,
+    p.reservoirCompressionSqueeze ?? 1.35,
+    p.kasureAmount ?? 0.30,
+    p.nibAngleDeg ?? -40
+  ].join("_");
+}
+
 /**
  * 瘦金體（Slender Gold）運筆物理モデル・中心線サンプリング＆肉付けコンパイラ
  */
@@ -1456,8 +1469,10 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       const thetaCur = Math.atan2(p.ty, p.tx);
       const dTheta = wrapAnglePi(thetaCur - thetaPrev);
 
-      // Paper pore blocking lead distance L = a*t + b*u + c (Chu & Tai 2004 p. 80, Fig. 5)
-      const poreLead = Math.max(0.20, Math.min(0.86, 0.26 + 0.50 * (1.0 - Math.min(1.0, pLoad)) - 0.12 * Math.abs(Math.sin(psiOblique))));
+      // Paper pore blocking lead distance L = a*t + b*u + c, t = max(|beta| - gamma, 0) (Chu & Tai 2004 p. 80, Fig. 5):
+      // tilt beyond the critical angle gamma lengthens the blocking lead, so the pores straighten the tip faster
+      const tiltExcess = Math.max(0.0, Math.abs(psiOblique) - 0.10);
+      const poreLead = Math.max(0.20, Math.min(0.86, 0.26 + 0.50 * (1.0 - Math.min(1.0, pLoad)) + 0.55 * tiltExcess));
 
       // Xu et al. (2004) Eq. 18: Differential tuft rotation (Zhuan 轉) vs. sharp corner folding (Zhe 折)
       let cornerKick = 0.0;
@@ -1475,16 +1490,16 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       plasticRho = Math.max(-alphaWet, Math.min(alphaWet, 0.80 * plasticRho + 0.20 * psiOblique));
 
       // Quasi-static elastica restoring relaxation toward zero-shifted plastic rest angle
-      const relaxRate = Math.max(0.04, Math.min(0.46, (dsStep / (charTuftLen * poreLead)) * (0.68 + 0.32 * plasticityParam)));
+      const relaxRate = Math.max(0.04, Math.min(0.46, (dsStep * poreLead / (charTuftLen * 0.16)) * (0.68 + 0.32 * plasticityParam)));
       const zhuanCoupling = 0.35 + 0.10 * Math.min(1.8, cefengParam); // Smooth curve rotation absorbs into tuft roll (Zhuan) vs. obliqueness (Cefeng)
       psiOblique = (1.0 - relaxRate) * (psiOblique - zhuanCoupling * dTheta + cornerKick) + relaxRate * plasticRho;
       psiOblique = Math.max(-0.82, Math.min(0.82, psiOblique));
 
-      // Cross-sectional double-half-ellipse flattening a_i / b_i (Xu et al. 2004 Eq. 18; Chu & Tai 2002 Sec. 4.1.2)
+      // Cross-sectional double-half-ellipse flattening a_i / b_i (Xu et al. 2004 Eqs. 12, 18; Chu & Tai 2002 Sec. 4.1.2)
       const targetEllip = 1.0 + 0.44 * Math.abs(Math.sin(psiOblique)) + 0.28 * Math.max(0.0, pLoad - 0.72) + 0.22 * rawPoolWeight[i];
       tuftEllipticity = 0.72 * tuftEllipticity + 0.28 * targetEllip;
 
-      // WetBrush inter-hair packing density & spherical-cap compression release (Chen et al. 2015 Sec. 5, Eqs. 12-14)
+      // WetBrush inter-hair packing density & spherical-cap compression release (Chen et al. 2015 Sec. 5.1, Eqs. 12-13)
       const packPsi = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(Math.sin(psiOblique))));
       const potCapMPrime = Math.max(0.22, 1.0 - 0.50 * packPsi);
       const pClamp = Math.min(1.2, pLoad);
@@ -1507,12 +1522,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
 
     const sinPsi = Math.sin(psiOblique);
-    const cosPsi = Math.cos(psiOblique);
-    // Anisotropic pull-vs-push Coulomb friction factor eta (Baxter & Lin 2004 Eqs. 13-14; Chu & Tai 2004 p. 80)
-    const etaPull = 0.45 * Math.pow(Math.max(0.0, cosPsi), 2);
-    const anisoFriction = (1.0 - etaPull) * (0.65 + 0.35 * pLoad);
-
-    // WetBrush instantaneous compression squeeze-out & inner stress (Chen et al. 2015 Eqs. 12-14; Xu et al. 2003 Eq. 9)
+    // WetBrush instantaneous compression squeeze-out & inner stress (Chen et al. 2015 Eqs. 12-13; Xu et al. 2004 Eqs. 12, 14; Xu et al. 2003 Sec. 3.1)
     const packHere = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(sinPsi)));
     const capHere = Math.max(0.22, 1.0 - 0.50 * packHere) - 0.20 * Math.min(1.2, pLoad) * Math.min(1.2, pLoad);
     const squeezeHere = (Math.max(0.0, wBelly - capHere) * 0.65 + 0.32 * rawPoolWeight[i]) * (0.55 + 0.45 * squeezeParam);
@@ -1531,8 +1541,9 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     const uEndFade = u > 0.90 ? ((1.0 - u) / 0.10) * ((1.0 - u) / 0.10) * (3.0 - 2.0 * ((1.0 - u) / 0.10)) : 1.0;
     const wTot = rawWL[i] + rawWR[i];
     const cefengShift = Math.max(-0.095, Math.min(0.095, 0.075 * cefengParam * sinPsi * uStartFade * uEndFade));
-    rawWL[i] = Math.max(0.08, rawWL[i] - 0.5 * wTot * cefengShift);
-    rawWR[i] = Math.max(0.08, wTot - rawWL[i]);
+    const shiftedL = rawWL[i] - 0.5 * wTot * cefengShift;
+    rawWL[i] = wTot > 0.16 ? Math.max(0.08, Math.min(wTot - 0.08, shiftedL)) : rawWL[i];
+    rawWR[i] = wTot - rawWL[i];
 
     p.tuftObliqueness = psiOblique;
     p.cefengBias = sinPsi * (0.35 + 0.50 * Math.min(1.8, cefengParam));
@@ -1543,7 +1554,6 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     p.compressionSqueeze = squeezeHere;
     p.tuftStress = stressHere;
     p.coreMantleRadiusFrac = coreFracHere;
-    p.anisoFriction = anisoFriction;
   }
 
   // Curvature-clamped inner offset
@@ -1853,7 +1863,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     cornerFeatures: evalCornerFeatures,
     boxSize,
     sweepStartU: 0.43,
-    _brushCompileKey: `${coreMantleParam}_${cefengParam}_${plasticityParam}_${squeezeParam}_${SLENDER_PHYSICS.kasureAmount ?? 0.30}`
+    _brushCompileKey: getBrushCompileKey(SLENDER_PHYSICS)
   };
 }
 
@@ -2842,7 +2852,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const squeezeInt = phys.reservoirCompressionSqueeze ?? 1.35;
 
   // Pre-step 48x48 Virtual Chinese Brush Bristle Array & Capillary Meniscus Split Map
-  // (Strassmann 1986 Sec. 4.1-4.4; Chu & Tai 2004 Split/Dry Map; Chen et al. 2015 WetBrush Eqs. 12-14; Xu et al. 2004 Eqs. 5, 17, 20)
+  // (Strassmann 1986 Sec. 4.1-4.4; Chu & Tai 2004 Split/Dry Map; Chen et al. 2015 WetBrush Eqs. 12-13; Xu et al. 2004 Eqs. 5, 17)
   const N_BRUSH = 48;
   const uCefengLut = new Float32Array(N_BRUSH);
   const uWetnessLut = new Float32Array(N_BRUSH);
@@ -2852,9 +2862,12 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const uPlasticLut = new Float32Array(N_BRUSH);
   const bristleLut = new Float32Array(N_BRUSH * N_BRUSH);
 
-  const maxPtIdx = Math.max(1, limitIdx);
+  // LUT rows are indexed by the stroke's *global* u in [0, 1] (the same coordinate the per-pixel pass samples),
+  // so partial (animated) renders at limitIdx < pts.length - 1 match the final full render for u <= u(limitIdx).
+  const fullPtIdx = Math.max(1, pts.length - 1);
+  const maxPtIdx = Math.max(1, Math.min(limitIdx, fullPtIdx));
   for (let k = 0; k < N_BRUSH; k++) {
-    const fPt = (k / (N_BRUSH - 1)) * maxPtIdx;
+    const fPt = Math.min(maxPtIdx, (k / (N_BRUSH - 1)) * fullPtIdx);
     const idxA = Math.min(maxPtIdx, Math.floor(fPt));
     const idxB = Math.min(maxPtIdx, idxA + 1);
     const fr = fPt - idxA;
@@ -2871,7 +2884,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   // Evolve 1D cellular bristle reservoirs across u in [0, 1] with arcsin(|v|) contact thresholds & meniscus diffusion
   const bState = new Float32Array(N_BRUSH);
   const bNext = new Float32Array(N_BRUSH);
-  const strokeSeed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233 + pts[maxPtIdx].x * 37.719) * 43758.5453);
+  const strokeSeed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233 + pts[fullPtIdx].x * 37.719) * 43758.5453);
   for (let m = 0; m < N_BRUSH; m++) {
     const vNorm = -1.0 + (2.0 * m) / (N_BRUSH - 1);
     const absV = Math.abs(vNorm);
@@ -2992,7 +3005,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       qSeg += 0.24 * Math.exp(-(du * du) / 0.014);
     }
     // WetBrush inter-hair compression squeeze-out & Elastica fold plasticity enrichment
-    // (Chen et al. 2015 Sec. 5, Eqs. 12-14; Chu & Tai 2004 p. 79; Xu et al. 2003 Eq. 9)
+    // (Chen et al. 2015 Sec. 5.1, Eqs. 12-13; Chu & Tai 2004 p. 79; Xu et al. 2004 Eq. 14)
     const segSqueeze = 0.5 * ((pA.compressionSqueeze ?? 0.30) + (pB.compressionSqueeze ?? 0.30));
     const segPlastic = 0.5 * (Math.abs(pA.plasticLag ?? 0.0) + Math.abs(pB.plasticLag ?? 0.0));
     qSeg += 0.09 * Math.max(0.0, segSqueeze - 0.26) * (0.55 + 0.45 * squeezeInt) + 0.07 * segPlastic * plasticityInt;
@@ -3600,7 +3613,7 @@ function refreshCalligraphySumiCanvas(rootEl = document) {
   const isDark = (document.documentElement.getAttribute("data-theme") || "dark") === "dark";
   const baseTone = isDark ? "dark-sumi" : "sumi";
   const p = SLENDER_PHYSICS || DEFAULT_SLENDER_PHYSICS;
-  const expectedCompileKey = `${p.coreMantleContrast ?? 1.35}_${p.cefengObliqueIntensity ?? 1.30}_${p.tuftPlasticityElasticity ?? 1.25}_${p.reservoirCompressionSqueeze ?? 1.35}_${p.kasureAmount ?? 0.30}`;
+  const expectedCompileKey = getBrushCompileKey(p);
 
   canvases.forEach(canvas => {
     const ctx = canvas.getContext("2d");
