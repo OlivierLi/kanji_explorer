@@ -1913,57 +1913,281 @@ function getStrokeBufferCanvas(w, h) {
   return { bufferCanvas: strokeBufferCanvas, bufferCtx: strokeBufferCtx };
 }
 
-let cloudySumiTextureCanvas = null;
+let xuanPaperSubstrateCache = null;
+let lbmWorkspaceCache = null;
+let kmOpticalLutCache = null;
 
-function getCloudySumiTextureCanvas() {
-  if (typeof document === "undefined") return null;
-  if (!cloudySumiTextureCanvas) {
-    const size = 512;
-    cloudySumiTextureCanvas = document.createElement("canvas");
-    cloudySumiTextureCanvas.width = size;
-    cloudySumiTextureCanvas.height = size;
-    const tCtx = cloudySumiTextureCanvas.getContext("2d");
+/**
+ * Physically-Based Multi-Layer Xuan Paper Substrate Generator
+ * Grounded in:
+ * - Chu & Tai (2005), "MoXi: Real-Time Ink Dispersion in Absorbent Paper", ACM TOG (SIGGRAPH 2005), Sec. 5.1, 5.3.1, 5.3.3, Eq. 6 & Eq. 9.
+ * - Curtis, Anderson, Seims, Fleischer, Salesin (1997), "Computer-Generated Watercolor", SIGGRAPH '97, Sec. 4.1.
+ *
+ * Precomputes:
+ * - zeroB5Grain: Anisotropic cellulose fiber network whose 5x5 integer box sums are identically zero
+ *   (preventing step-quantization ripple along 5x5 spine sampling windows while giving crisp per-pixel fiber grain).
+ * - macroFiber: Long-range laid bamboo screen lines (lianwen) & pulp flocculation clouds.
+ * - height: Normalized paper surface topography h(x,y) in [0.05, 0.95].
+ * - capacity: Local fluid-holding capacity c(x,y) = h(x,y)*(cMax - cMin) + cMin.
+ * - blocking: Porous link blocking factor kappa_0(x,y) (Eq. 6: fiber density + alum sizing).
+ * - pinning: Wet-dry contact-line disorder pinning threshold sigma_0(x,y) (Eq. 9).
+ */
+function getXuanPaperSubstrate(w, h) {
+  if (xuanPaperSubstrateCache && xuanPaperSubstrateCache.w === w && xuanPaperSubstrateCache.h === h) {
+    return xuanPaperSubstrateCache;
+  }
 
-    tCtx.fillStyle = "rgba(28, 24, 20, 0.30)";
-    tCtx.fillRect(0, 0, size, size);
+  const n = w * h;
+  const zeroB5Grain = new Float32Array(n);
+  const macroFiber = new Float32Array(n);
+  const height = new Float32Array(n);
+  const capacity = new Float32Array(n);
+  const blocking = new Float32Array(n);
+  const pinning = new Float32Array(n);
 
-    let seed = 12345;
-    function rnd() {
-      seed = (seed * 16807) % 2147483647;
-      return (seed - 1) / 2147483646;
-    }
+  const TWO_PI_5 = (2.0 * Math.PI) / 5.0;
 
-    // Multi-scale soft cloudy blotches with subtle tonal contrast
-    for (let i = 0; i < 95; i++) {
-      const cx = rnd() * size;
-      const cy = rnd() * size;
-      const rad = 14 + rnd() * 24;
-      const grad = tCtx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-      const isDark = rnd() > 0.42;
-      grad.addColorStop(0, isDark ? "rgba(18, 15, 12, 0.14)" : "rgba(45, 38, 32, 0.08)");
-      grad.addColorStop(1, "rgba(0, 0, 0, 0)");
-      tCtx.fillStyle = grad;
-      tCtx.beginPath();
-      tCtx.arc(cx, cy, rad, 0, Math.PI * 2);
-      tCtx.fill();
-    }
+  // 1D row and column organic phase/envelope tables for curved cellulose fiber bundles
+  const rowAmp1 = new Float32Array(h);
+  const rowAmp2 = new Float32Array(h);
+  const rowPhi1 = new Float32Array(h);
+  const rowPhi2 = new Float32Array(h);
+  const rowPhi3 = new Float32Array(h);
+  const rowPhi4 = new Float32Array(h);
 
-    // Random short 4px paper fibers at random angles
-    tCtx.lineWidth = 0.8;
-    tCtx.lineCap = "round";
-    for (let i = 0; i < 260; i++) {
-      const fx = rnd() * size;
-      const fy = rnd() * size;
-      const len = 2.5 + rnd() * 4.5;
-      const ang = rnd() * Math.PI * 2;
-      tCtx.strokeStyle = rnd() > 0.5 ? "rgba(18, 15, 12, 0.08)" : "rgba(38, 32, 28, 0.05)";
-      tCtx.beginPath();
-      tCtx.moveTo(fx, fy);
-      tCtx.lineTo(fx + Math.cos(ang) * len, fy + Math.sin(ang) * len);
-      tCtx.stroke();
+  for (let y = 0; y < h; y++) {
+    rowAmp1[y] = 0.34 + 0.10 * Math.sin(y * 0.043 + 0.7) + 0.07 * Math.cos(y * 0.113 - 1.2);
+    rowAmp2[y] = 0.22 + 0.08 * Math.cos(y * 0.061 + 2.1) + 0.05 * Math.sin(y * 0.157 + 0.4);
+    // Tilted & gently curving vertical/diagonal cellulose fiber bundles
+    rowPhi1[y] = 0.38 * y + 1.15 * Math.sin(y * 0.037 + 0.5) + 0.55 * Math.cos(y * 0.089 - 0.8);
+    rowPhi2[y] = -0.52 * y + 1.30 * Math.cos(y * 0.041 + 1.9) + 0.60 * Math.sin(y * 0.097 + 1.1);
+    rowPhi3[y] = 0.74 * y + 0.90 * Math.sin(y * 0.053 - 0.4);
+    rowPhi4[y] = -0.31 * y + 1.05 * Math.cos(y * 0.067 + 2.6);
+  }
+
+  const colAmp1 = new Float32Array(w);
+  const colAmp2 = new Float32Array(w);
+  const colPsi1 = new Float32Array(w);
+  const colPsi2 = new Float32Array(w);
+  const colPsi3 = new Float32Array(w);
+  const colPsi4 = new Float32Array(w);
+
+  for (let x = 0; x < w; x++) {
+    colAmp1[x] = 0.36 + 0.11 * Math.cos(x * 0.039 - 0.6) + 0.07 * Math.sin(x * 0.107 + 1.5);
+    colAmp2[x] = 0.24 + 0.08 * Math.sin(x * 0.057 + 0.9) + 0.06 * Math.cos(x * 0.149 - 1.8);
+    // Tilted & gently curving horizontal/laid-screen cellulose fibers
+    colPsi1[x] = 0.33 * x + 1.20 * Math.cos(x * 0.033 + 1.2) + 0.50 * Math.sin(x * 0.083 - 0.5);
+    colPsi2[x] = -0.47 * x + 1.10 * Math.sin(x * 0.047 - 1.4) + 0.65 * Math.cos(x * 0.103 + 0.7);
+    colPsi3[x] = 0.68 * x + 0.85 * Math.cos(x * 0.059 + 2.0);
+    colPsi4[x] = -0.29 * x + 0.95 * Math.sin(x * 0.071 - 0.9);
+  }
+
+  // Exact 5-pixel harmonic cosine tables along x and y
+  const cosX1 = new Float32Array(w);
+  const sinX1 = new Float32Array(w);
+  const cosX2 = new Float32Array(w);
+  const sinX2 = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    const a1 = TWO_PI_5 * x;
+    const a2 = TWO_PI_5 * 2.0 * x;
+    cosX1[x] = Math.cos(a1);
+    sinX1[x] = Math.sin(a1);
+    cosX2[x] = Math.cos(a2);
+    sinX2[x] = Math.sin(a2);
+  }
+
+  const cosY1 = new Float32Array(h);
+  const sinY1 = new Float32Array(h);
+  const cosY2 = new Float32Array(h);
+  const sinY2 = new Float32Array(h);
+  for (let y = 0; y < h; y++) {
+    const b1 = TWO_PI_5 * y;
+    const b2 = TWO_PI_5 * 2.0 * y;
+    cosY1[y] = Math.cos(b1);
+    sinY1[y] = Math.sin(b1);
+    cosY2[y] = Math.cos(b2);
+    sinY2[y] = Math.sin(b2);
+  }
+
+  const cMin = 0.34;
+  const cMax = 0.88;
+
+  for (let y = 0; y < h; y++) {
+    const rA1 = rowAmp1[y];
+    const rA2 = rowAmp2[y];
+    const cP1 = Math.cos(rowPhi1[y]), sP1 = Math.sin(rowPhi1[y]);
+    const cP2 = Math.cos(rowPhi2[y]), sP2 = Math.sin(rowPhi2[y]);
+    const cP3 = Math.cos(rowPhi3[y]), sP3 = Math.sin(rowPhi3[y]);
+    const cP4 = Math.cos(rowPhi4[y]), sP4 = Math.sin(rowPhi4[y]);
+    const cy1 = cosY1[y], sy1 = sinY1[y];
+    const cy2 = cosY2[y], sy2 = sinY2[y];
+
+    // Laid bamboo screen lines (horizontal ribbing every ~14px)
+    const screenRib = 0.32 * Math.sin(y * 0.44 + 0.3 * Math.sin(y * 0.07));
+    const rowOff = y * w;
+
+    for (let x = 0; x < w; x++) {
+      const idx = rowOff + x;
+      const cx1 = cosX1[x], sx1 = sinX1[x];
+      const cx2 = cosX2[x], sx2 = sinX2[x];
+
+      // Row-zero-sum fiber waves: cos(2*pi*m*x/5 + phi(y)) = cos(2*pi*m*x/5)*cos(phi) - sin(2*pi*m*x/5)*sin(phi)
+      const wRow =
+        rA1 * ((cx1 * cP1 - sx1 * sP1) + 0.72 * (cx1 * cP2 - sx1 * sP2)) +
+        rA2 * ((cx2 * cP3 - sx2 * sP3) + 0.65 * (cx2 * cP4 - sx2 * sP4));
+
+      // Col-zero-sum fiber waves: cos(2*pi*n*y/5 + psi(x))
+      const cQ1 = Math.cos(colPsi1[x]), sQ1 = Math.sin(colPsi1[x]);
+      const cQ2 = Math.cos(colPsi2[x]), sQ2 = Math.sin(colPsi2[x]);
+      const cQ3 = Math.cos(colPsi3[x]), sQ3 = Math.sin(colPsi3[x]);
+      const cQ4 = Math.cos(colPsi4[x]), sQ4 = Math.sin(colPsi4[x]);
+      const wCol =
+        colAmp1[x] * ((cy1 * cQ1 - sy1 * sQ1) + 0.74 * (cy1 * cQ2 - sy1 * sQ2)) +
+        colAmp2[x] * ((cy2 * cQ3 - sy2 * sQ3) + 0.62 * (cy2 * cQ4 - sy2 * sQ4));
+
+      // 2D separable pore-lattice cross-harmonics (both row and col 5-px sums are identically 0)
+      const wCross =
+        0.26 * (cx1 * 0.82 - sx1 * 0.57) * (cy1 * 0.64 + sy1 * 0.77) +
+        0.18 * (cx2 * 0.54 + sx2 * 0.84) * (cy1 * 0.91 - sy1 * 0.41) +
+        0.14 * (cx1 * 0.36 + sx1 * 0.93) * (cy2 * 0.73 + sy2 * 0.68);
+
+      const gZero = Math.max(-1.0, Math.min(1.0, 0.58 * (wRow + wCol + wCross)));
+      zeroB5Grain[idx] = gZero;
+
+      // Long-range disordered mulberry fiber bundles & pulp flocculation
+      const f1 = Math.sin((x * 0.17 + y * 0.09) + 0.8 * Math.sin(x * 0.031 - y * 0.043));
+      const f2 = Math.cos((x * 0.08 - y * 0.19) + 0.9 * Math.cos(x * 0.049 + y * 0.027));
+      const floc = 0.5 * Math.sin(x * 0.053 + y * 0.061) * Math.cos(x * 0.079 - y * 0.047);
+      const mFib = Math.max(-1.0, Math.min(1.0, 0.42 * f1 + 0.36 * f2 + 0.35 * floc + screenRib));
+      macroFiber[idx] = mFib;
+
+      // Normalized paper height h(x,y) in [0.05, 0.95]
+      const hVal = Math.max(0.05, Math.min(0.95, 0.50 + 0.30 * gZero + 0.15 * mFib));
+      height[idx] = hVal;
+
+      // Fluid capacity c(x,y) (Curtis et al. 1997 Sec. 4.1)
+      capacity[idx] = hVal * (cMax - cMin) + cMin;
+
+      // Alum sizing A(x,y) & porous blocking factor kappa_0(x,y) (Chu & Tai 2005 Eq. 6)
+      const alum = 0.5 + 0.5 * Math.sin(x * 0.13 + y * 0.11 + 1.4 * gZero);
+      blocking[idx] = 0.18 + 0.24 * hVal + 0.12 * alum;
+
+      // Pinning disorder texture P(x,y) & threshold sigma_0(x,y) (Chu & Tai 2005 Eq. 9)
+      const disorder = 0.5 + 0.30 * gZero + 0.20 * mFib;
+      pinning[idx] = 0.065 + 0.115 * Math.max(0.0, Math.min(1.0, disorder));
     }
   }
-  return cloudySumiTextureCanvas;
+
+  xuanPaperSubstrateCache = { w, h, zeroB5Grain, macroFiber, height, capacity, blocking, pinning };
+  return xuanPaperSubstrateCache;
+}
+
+/**
+ * Reusable typed-array workspace for local bounding-box D2Q9 LBM percolation & pigment transport.
+ */
+function getLbmWorkspace(maxCells) {
+  if (!lbmWorkspaceCache || lbmWorkspaceCache.maxCells < maxCells) {
+    lbmWorkspaceCache = {
+      maxCells,
+      m0: new Float32Array(maxCells),
+      mBlur: new Float32Array(maxCells),
+      dSpineSq: new Float32Array(maxCells),
+      uField: new Float32Array(maxCells),
+      vField: new Float32Array(maxCells),
+      qField: new Float32Array(maxCells),
+      surfInk: new Float32Array(maxCells),
+      rho: new Float32Array(maxCells),
+      pf: new Float32Array(maxCells),
+      px: new Float32Array(maxCells),
+      f0: new Float32Array(maxCells),
+      f1: new Float32Array(maxCells),
+      f2: new Float32Array(maxCells),
+      f3: new Float32Array(maxCells),
+      f4: new Float32Array(maxCells),
+      f5: new Float32Array(maxCells),
+      f6: new Float32Array(maxCells),
+      f7: new Float32Array(maxCells),
+      f8: new Float32Array(maxCells),
+      fn1: new Float32Array(maxCells),
+      fn2: new Float32Array(maxCells),
+      fn3: new Float32Array(maxCells),
+      fn4: new Float32Array(maxCells),
+      fn5: new Float32Array(maxCells),
+      fn6: new Float32Array(maxCells),
+      fn7: new Float32Array(maxCells),
+      fn8: new Float32Array(maxCells)
+    };
+  }
+  return lbmWorkspaceCache;
+}
+
+/**
+ * Precomputed Exact Two-Flux Kubelka-Munk Hyperbolic Reflectance (R1) & Transmittance (T1) Lookup Tables
+ * Grounded in Curtis et al. (1997), "Computer-Generated Watercolor", SIGGRAPH '97, Sec. 5.1-5.2, Eqs. 6-8:
+ *   a = 1 + K / S,  b = sqrt(a^2 - 1)
+ *   R1(x) = sinh(b*S*x) / (a*sinh(b*S*x) + b*cosh(b*S*x))
+ *   T1(x) = b / (a*sinh(b*S*x) + b*cosh(b*S*x))
+ */
+function getKubelkaMunkOpticalLut() {
+  if (kmOpticalLutCache) return kmOpticalLutCache;
+
+  const N = 2048;
+  const maxX = 2.0;
+  const palettes = {
+    // Pine-soot carbon sumi ink (songyan mo): warm brown-black carbon absorption + animal-glue scattering
+    "sumi": {
+      K: [2.04, 2.20, 2.38],
+      S: [0.35, 0.30, 0.26],
+      R2: [0.953, 0.929, 0.886]
+    },
+    // Cinnabar seal ink (zhusha, HgS): strong red scattering, strong green/blue absorption
+    "vermilion": {
+      K: [0.32, 2.85, 3.10],
+      S: [1.48, 0.22, 0.19],
+      R2: [0.953, 0.929, 0.886]
+    },
+    // Luminous mineral shell-white / silver sumi suspension for dark slate theme
+    "dark-sumi": {
+      K: [0.16, 0.14, 0.11],
+      S: [1.85, 1.94, 2.06],
+      R2: [0.071, 0.086, 0.122]
+    }
+  };
+
+  kmOpticalLutCache = {};
+  for (const [mode, pal] of Object.entries(palettes)) {
+    const R1R = new Float32Array(N);
+    const R1G = new Float32Array(N);
+    const R1B = new Float32Array(N);
+    const T1R = new Float32Array(N);
+    const T1G = new Float32Array(N);
+    const T1B = new Float32Array(N);
+
+    const a = [0, 0, 0];
+    const b = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      a[c] = 1.0 + pal.K[c] / pal.S[c];
+      b[c] = Math.sqrt(Math.max(1e-8, a[c] * a[c] - 1.0));
+    }
+
+    for (let i = 0; i < N; i++) {
+      const x = (i / (N - 1)) * maxX;
+      for (let c = 0; c < 3; c++) {
+        const arg = b[c] * pal.S[c] * x;
+        const sh = Math.sinh(arg);
+        const ch = Math.cosh(arg);
+        const denom = a[c] * sh + b[c] * ch;
+        const r1 = denom > 1e-9 ? sh / denom : 0.0;
+        const t1 = denom > 1e-9 ? b[c] / denom : 1.0;
+        if (c === 0) { R1R[i] = r1; T1R[i] = t1; }
+        else if (c === 1) { R1G[i] = r1; T1G[i] = t1; }
+        else { R1B[i] = r1; T1B[i] = t1; }
+      }
+    }
+
+    kmOpticalLutCache[mode] = { N, maxX, R1R, R1G, R1B, T1R, T1G, T1B, R2: pal.R2 };
+  }
+  return kmOpticalLutCache;
 }
 
 function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = false) {
@@ -2253,141 +2477,516 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
   ctx.restore();
 }
 
-function renderInternalSumiToneAndPooling(ctx, compiled, limitIdx, toneMode = "sumi") {
+/**
+ * Physically-Based Ink Dispersion (D2Q9 Lattice Boltzmann Method), Pigment Advection/Granulation,
+ * Contact-Line Coffee-Ring Darkening, and Two-Flux Kubelka-Munk Optical Rendering.
+ *
+ * References:
+ * 1. Chu & Tai (2005), "MoXi: Real-Time Ink Dispersion in Absorbent Paper", ACM TOG 24(3), 504-511.
+ *    - Surface-to-flow seepage phi = clamp(s, 0, c - rho) (Sec. 5.2)
+ *    - D2Q9 He-Luo incompressible LBM equilibrium with low-saturation advection modulation psi(rho) (Eqs. 7-8)
+ *    - Anisotropic fiber-blocked streaming kappa_i & disorder pinning threshold sigma (Eqs. 4, 5, 6, 9)
+ *    - Suspended (pf) to fixed (px) pigment advection & fixture (Sec. 5.4, Eq. 10)
+ * 2. Curtis et al. (1997), "Computer-Generated Watercolor", SIGGRAPH '97, 421-430.
+ *    - Outward capillary replenishment & contact-line edge darkening (Sec. 4.3.3, Eq. 3)
+ *    - Paper valley granulation vs. ridge thinning (Sec. 4.5)
+ *    - Exact two-flux Kubelka-Munk hyperbolic reflectance R1(x) & transmittance T1(x) (Sec. 5.1-5.2, Eqs. 6-8)
+ * 3. Chu & Tai (2004), "Real-Time Painting with an Expressive Virtual Chinese Brush", IEEE CG&A 24(5), 76-85.
+ *    - Dry-brush (feibai/kasure) peak catching on raised paper fibers (p. 81)
+ */
+function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, toneMode = "sumi") {
   const pts = compiled.samples;
-  const r = compiled.shaftRadius;
+  if (!pts || limitIdx < 1) return;
 
-  ctx.save();
-  ctx.globalCompositeOperation = "source-atop";
-
-  // 1. Procedural 2D cloudy sumi wash & fibrous paper grain
   const W = ctx.canvas.width;
   const H = ctx.canvas.height;
-  const tex = getCloudySumiTextureCanvas();
-  if (tex) {
-    ctx.save();
-    ctx.globalAlpha = (toneMode === "dark-sumi") ? 0.05 : 0.06;
-    const pat = ctx.createPattern(tex, "repeat");
-    if (pat) {
-      ctx.fillStyle = pat;
-      ctx.fillRect(0, 0, W, H);
+  const paper = getXuanPaperSubstrate(W, H);
+  const kmAll = getKubelkaMunkOpticalLut();
+  const km = kmAll[toneMode] || kmAll["sumi"];
+
+  // 1. Compute tight padded bounding box of the stroke up to limitIdx
+  const baseR = compiled.shaftRadius || 8.0;
+  const pad = Math.ceil(baseR * 1.65 + 10);
+  let minX = W, minY = H, maxX = 0, maxY = 0;
+  for (let i = 0; i <= limitIdx; i++) {
+    const p = pts[i];
+    if (p.lx < minX) minX = p.lx;
+    if (p.rx < minX) minX = p.rx;
+    if (p.x < minX) minX = p.x;
+    if (p.lx > maxX) maxX = p.lx;
+    if (p.rx > maxX) maxX = p.rx;
+    if (p.x > maxX) maxX = p.x;
+
+    if (p.ly < minY) minY = p.ly;
+    if (p.ry < minY) minY = p.ry;
+    if (p.y < minY) minY = p.y;
+    if (p.ly > maxY) maxY = p.ly;
+    if (p.ry > maxY) maxY = p.ry;
+    if (p.y > maxY) maxY = p.y;
+  }
+  if (compiled.hookFeature) {
+    const hPad = Math.ceil(baseR * 3.6);
+    minX -= hPad;
+    minY -= hPad;
+    maxX += hPad;
+    maxY += hPad;
+  }
+  const x0 = Math.max(0, Math.floor(minX - pad));
+  const y0 = Math.max(0, Math.floor(minY - pad));
+  const x1 = Math.min(W - 1, Math.ceil(maxX + pad));
+  const y1 = Math.min(H - 1, Math.ceil(maxY + pad));
+  const bw = x1 - x0 + 1;
+  const bh = y1 - y0 + 1;
+  if (bw <= 2 || bh <= 2) return;
+
+  const nCells = bw * bh;
+  const ws = getLbmWorkspace(nCells);
+  const {
+    m0, mBlur, dSpineSq, uField, vField, qField, surfInk, rho, pf, px,
+    f0, f1, f2, f3, f4, f5, f6, f7, f8,
+    fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8
+  } = ws;
+
+  const imgData = ctx.getImageData(x0, y0, bw, bh);
+  const data = imgData.data;
+
+  // 2. Initialize footprint mask M0(x) and clear local fields (including boundary LBM streaming buffers)
+  const INF_DIST = 1e9;
+  for (let i = 0; i < nCells; i++) {
+    const a = data[i * 4 + 3] / 255.0;
+    m0[i] = a;
+    mBlur[i] = a;
+    dSpineSq[i] = INF_DIST;
+    uField[i] = 0.5;
+    vField[i] = 0.0;
+    qField[i] = 0.0;
+    fn1[i] = 0.0; fn2[i] = 0.0; fn3[i] = 0.0; fn4[i] = 0.0;
+    fn5[i] = 0.0; fn6[i] = 0.0; fn7[i] = 0.0; fn8[i] = 0.0;
+  }
+
+  // 3. Splat exact Euclidean distance to stroke spine segments [p_i, p_{i+1}], skeletal lateral coordinate v,
+  //    and calligraphic tuft load (Hsu & Lee 1994 Skeletal Strokes; Strassmann 1986 Hairy Brushes)
+  const corners = compiled.cornerFeatures || [];
+  const hf = compiled.hookFeature;
+  const isRightNa = !!(compiled.behavior && compiled.behavior.isRightNa);
+  const isSweepTail = !!(
+    compiled.behavior &&
+    compiled.behavior.isSweepEnd &&
+    !compiled.behavior.isZiHengPie &&
+    !compiled.behavior.isRoofHook &&
+    !compiled.behavior.isRisingTi &&
+    !compiled.behavior.isVerticalTi &&
+    !isRightNa &&
+    !hf
+  );
+
+  for (let i = 0; i < limitIdx; i++) {
+    const pA = pts[i];
+    const pB = pts[i + 1];
+    const ax = pA.x - x0;
+    const ay = pA.y - y0;
+    const bx = pB.x - x0;
+    const by = pB.y - y0;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const invLenSq = lenSq > 1e-6 ? 1.0 / lenSq : 0.0;
+    const segLen = Math.sqrt(lenSq);
+    const nx = segLen > 1e-4 ? -dy / segLen : (pA.nx || 0.0);
+    const ny = segLen > 1e-4 ? dx / segLen : (pA.ny || 1.0);
+
+    const wA = Math.max(1.5, 0.5 * Math.hypot(pA.rx - pA.lx, pA.ry - pA.ly));
+    const wB = Math.max(1.5, 0.5 * Math.hypot(pB.rx - pB.lx, pB.ry - pB.ly));
+    const reach = Math.ceil(Math.max(wA, wB, baseR) + 6.0);
+
+    const sMinX = Math.max(0, Math.floor(Math.min(ax, bx) - reach));
+    const sMaxX = Math.min(bw - 1, Math.ceil(Math.max(ax, bx) + reach));
+    const sMinY = Math.max(0, Math.floor(Math.min(ay, by) - reach));
+    const sMaxY = Math.min(bh - 1, Math.ceil(Math.max(ay, by) + reach));
+
+    // Calligraphic pause moisture/pigment enrichment (entry ton press, osae corners, hook heel, na foot)
+    const uMid = 0.5 * ((pA.u ?? (i / limitIdx)) + (pB.u ?? ((i + 1) / limitIdx)));
+    let qSeg = 0.15 * Math.exp(-((uMid - 0.04) * (uMid - 0.04)) / 0.0045);
+    for (let c = 0; c < corners.length; c++) {
+      if (limitIdx >= corners[c].index) {
+        const di = i - corners[c].index;
+        qSeg += 0.17 * Math.exp(-(di * di) / 32.0);
+      }
     }
-    ctx.restore();
-  }
+    if (hf && limitIdx >= hf.index) {
+      const di = i - hf.index;
+      qSeg += 0.19 * Math.exp(-(di * di) / 38.0);
+    }
+    if (isRightNa) {
+      const du = uMid - 0.68;
+      qSeg += 0.16 * Math.exp(-(du * du) / 0.012);
+    }
 
-  // Tone color definitions
-  let heavyC0, heavyC1, heavyC2;
-  let lightC0, lightC1, lightC2;
-  let poolC0, poolC1, poolC2;
+    const uA = pA.u ?? (i / Math.max(1, pts.length - 1));
+    const uB = pB.u ?? ((i + 1) / Math.max(1, pts.length - 1));
 
-  if (toneMode === "vermilion") {
-    heavyC0 = "rgba(115, 14, 12, 0.45)";
-    heavyC1 = "rgba(115, 14, 12, 0.20)";
-    heavyC2 = "rgba(115, 14, 12, 0)";
-    lightC0 = "rgba(145, 24, 20, 0.20)";
-    lightC1 = "rgba(145, 24, 20, 0.08)";
-    lightC2 = "rgba(145, 24, 20, 0)";
-    poolC0  = "rgba(115, 14, 12, 0.14)";
-    poolC1  = "rgba(115, 14, 12, 0.06)";
-    poolC2  = "rgba(115, 14, 12, 0)";
-  } else if (toneMode === "dark-sumi") {
-    heavyC0 = "rgba(255, 255, 255, 0.25)";
-    heavyC1 = "rgba(255, 255, 255, 0.10)";
-    heavyC2 = "rgba(255, 255, 255, 0)";
-    lightC0 = "rgba(255, 255, 255, 0.12)";
-    lightC1 = "rgba(255, 255, 255, 0.05)";
-    lightC2 = "rgba(255, 255, 255, 0)";
-    poolC0  = "rgba(255, 255, 255, 0.14)";
-    poolC1  = "rgba(255, 255, 255, 0.06)";
-    poolC2  = "rgba(255, 255, 255, 0)";
-  } else {
-    heavyC0 = "rgba(6, 5, 4, 0.45)";
-    heavyC1 = "rgba(10, 8, 7, 0.20)";
-    heavyC2 = "rgba(10, 8, 7, 0)";
-    lightC0 = "rgba(42, 36, 31, 0.20)";
-    lightC1 = "rgba(35, 30, 26, 0.08)";
-    lightC2 = "rgba(35, 30, 26, 0)";
-    poolC0  = "rgba(4, 3, 2, 0.03)";
-    poolC1  = "rgba(4, 3, 2, 0.01)";
-    poolC2  = "rgba(4, 3, 2, 0)";
-  }
-
-  // 2. Soft continuous centerline wash along the stroke spine
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i <= limitIdx; i++) {
-    ctx.lineTo(pts[i].x, pts[i].y);
-  }
-  ctx.lineWidth = r * 1.35;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = lightC1;
-  ctx.stroke();
-
-  // 3. Soft radial pause pooling
-  // Entry press belly
-  const entryIdx = Math.min(limitIdx, Math.floor(pts.length * 0.08));
-  const pEntry = pts[entryIdx];
-  const p0 = pts[0];
-  const entryMidX = (p0.x + pEntry.x) * 0.5;
-  const entryMidY = (p0.y + pEntry.y) * 0.5;
-  const entryGrad = ctx.createRadialGradient(entryMidX, entryMidY, 0, entryMidX, entryMidY, r * 2.2);
-  entryGrad.addColorStop(0, poolC0);
-  entryGrad.addColorStop(0.60, poolC1);
-  entryGrad.addColorStop(1, poolC2);
-  ctx.fillStyle = entryGrad;
-  ctx.beginPath();
-  ctx.arc(entryMidX, entryMidY, r * 2.2, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Corner shoulders
-  for (const cf of compiled.cornerFeatures) {
-    if (limitIdx >= cf.index) {
-      const cp = pts[cf.index];
-      const shiftSign = cf.turnSign >= 0 ? 1 : -1;
-      const sx = cp.x + cp.nx * shiftSign * (r * 0.25);
-      const sy = cp.y + cp.ny * shiftSign * (r * 0.25);
-      const cornerGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 2.2);
-      cornerGrad.addColorStop(0, poolC0);
-      cornerGrad.addColorStop(0.65, poolC1);
-      cornerGrad.addColorStop(1, poolC2);
-      ctx.fillStyle = cornerGrad;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r * 2.2, 0, Math.PI * 2);
-      ctx.fill();
+    for (let ly = sMinY; ly <= sMaxY; ly++) {
+      const rowOff = ly * bw;
+      const py = ly - ay;
+      for (let lx = sMinX; lx <= sMaxX; lx++) {
+        const pxRel = lx - ax;
+        let t = (pxRel * dx + py * dy) * invLenSq;
+        if (t < 0.0) t = 0.0;
+        else if (t > 1.0) t = 1.0;
+        const projX = pxRel - t * dx;
+        const projY = py - t * dy;
+        const d2 = projX * projX + projY * projY;
+        const idx = rowOff + lx;
+        if (d2 < dSpineSq[idx]) {
+          dSpineSq[idx] = d2;
+          uField[idx] = uA + t * (uB - uA);
+          const wLoc = wA + t * (wB - wA);
+          const signedLat = (projX * nx + projY * ny) / wLoc;
+          vField[idx] = Math.max(-1.2, Math.min(1.2, signedLat));
+          qField[idx] = qSeg;
+        }
+      }
     }
   }
 
-  // Hook resting heel
-  if (compiled.hookFeature && limitIdx >= compiled.hookFeature.index) {
-    const hp = pts[compiled.hookFeature.index];
-    const hookGrad = ctx.createRadialGradient(hp.x, hp.y, 0, hp.x, hp.y, r * 2.2);
-    hookGrad.addColorStop(0, poolC0);
-    hookGrad.addColorStop(0.65, poolC1);
-    hookGrad.addColorStop(1, poolC2);
-    ctx.fillStyle = hookGrad;
-    ctx.beginPath();
-    ctx.arc(hp.x, hp.y, r * 2.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Na wave foot
-  if (compiled.behavior.isRightNa) {
-    const naIdx = Math.floor(pts.length * 0.68);
-    if (limitIdx >= naIdx) {
-      const np = pts[naIdx];
-      const naGrad = ctx.createRadialGradient(np.x, np.y, 0, np.x, np.y, r * 2.2);
-      naGrad.addColorStop(0, poolC0);
-      naGrad.addColorStop(0.65, poolC1);
-      naGrad.addColorStop(1, poolC2);
-      ctx.fillStyle = naGrad;
-      ctx.beginPath();
-      ctx.arc(np.x, np.y, r * 2.2, 0, Math.PI * 2);
-      ctx.fill();
+  // 4. Compute 3x3 Binomial-smoothed wet mask mBlur for contact-line capillary gradient & coffee-ring sink
+  for (let ly = 1; ly < bh - 1; ly++) {
+    const rowOff = ly * bw;
+    for (let lx = 1; lx < bw - 1; lx++) {
+      const idx = rowOff + lx;
+      mBlur[idx] =
+        0.25 * m0[idx] +
+        0.125 * (m0[idx - 1] + m0[idx + 1] + m0[idx - bw] + m0[idx + bw]) +
+        0.0625 * (m0[idx - bw - 1] + m0[idx - bw + 1] + m0[idx + bw - 1] + m0[idx + bw + 1]);
     }
   }
 
-  ctx.restore();
+  // 5. Initialize D2Q9 LBM fluid density rho, surface ink reservoir surfInk, and pigment layers pf, px
+  // D2Q9 lattice weights (Chu & Tai 2005 Sec. 5.3.2): w0 = 4/9, w1..4 = 1/9 (axis), w5..8 = 1/36 (diag)
+  const W0 = 4.0 / 9.0;
+  const WA = 1.0 / 9.0;
+  const WD = 1.0 / 36.0;
+
+  for (let i = 0; i < nCells; i++) {
+    const mask = m0[i];
+    const q = qField[i];
+    const initRho = mask * (0.58 + 0.22 * q);
+    surfInk[i] = mask * (0.18 + 0.16 * q);
+    rho[i] = initRho;
+    pf[i] = mask * (0.42 + 0.18 * q);
+    px[i] = mask * (0.30 + 0.10 * q);
+
+    f0[i] = W0 * initRho;
+    f1[i] = WA * initRho;
+    f2[i] = WA * initRho;
+    f3[i] = WA * initRho;
+    f4[i] = WA * initRho;
+    f5[i] = WD * initRho;
+    f6[i] = WD * initRho;
+    f7[i] = WD * initRho;
+    f8[i] = WD * initRho;
+  }
+
+  // 6. Execute D2Q9 Lattice Boltzmann Percolation & Wet-Dry Boundary Pinning (Chu & Tai 2005 Eqs. 1-9)
+  const omega = 0.54;
+  const oneMinusOmega = 1.0 - omega;
+  const alphaSat = 0.36;
+  const SQRT2 = 1.41421356;
+  const lbmSteps = 3;
+
+  for (let step = 0; step < lbmSteps; step++) {
+    // 6a. Seepage from surface reservoir + BGK collision toward He-Luo low-saturation equilibrium
+    for (let ly = 1; ly < bh - 1; ly++) {
+      const rowOff = ly * bw;
+      const gRowOff = (y0 + ly) * W + x0;
+      for (let lx = 1; lx < bw - 1; lx++) {
+        const idx = rowOff + lx;
+        const gIdx = gRowOff + lx;
+
+        // Surface-to-flow seepage phi = clamp(s, 0, 0.45*(c - rho))
+        let r = rho[idx];
+        const s = surfInk[idx];
+        if (s > 1e-5) {
+          const capRem = Math.max(0.0, paper.capacity[gIdx] - r);
+          const phi = Math.min(s, 0.45 * capRem);
+          surfInk[idx] = s - phi;
+          r += phi;
+          rho[idx] = r;
+          f0[idx] += W0 * phi;
+          f1[idx] += WA * phi;
+          f2[idx] += WA * phi;
+          f3[idx] += WA * phi;
+          f4[idx] += WA * phi;
+          f5[idx] += WD * phi;
+          f6[idx] += WD * phi;
+          f7[idx] += WD * phi;
+          f8[idx] += WD * phi;
+        }
+
+        if (r < 1e-4) {
+          fn1[idx] = 0; fn2[idx] = 0; fn3[idx] = 0; fn4[idx] = 0;
+          fn5[idx] = 0; fn6[idx] = 0; fn7[idx] = 0; fn8[idx] = 0;
+          continue;
+        }
+
+        // Capillary pressure gradient + paper surface slope drainage velocity u (Curtis et al. Eq. 3)
+        const dRhoX = rho[idx + 1] - rho[idx - 1];
+        const dRhoY = rho[idx + bw] - rho[idx - bw];
+        const dHX = paper.height[gIdx + 1] - paper.height[gIdx - 1];
+        const dHY = paper.height[gIdx + W] - paper.height[gIdx - W];
+        const ux = Math.max(-0.22, Math.min(0.22, -0.15 * dRhoX - 0.06 * dHX));
+        const uy = Math.max(-0.22, Math.min(0.22, -0.15 * dRhoY - 0.06 * dHY));
+
+        // Low-saturation advection weight psi(rho) = smoothstep(0, alphaSat, rho) (Chu & Tai Eq. 8)
+        const tSat = Math.min(1.0, r / alphaSat);
+        const psi = tSat * tSat * (3.0 - 2.0 * tSat);
+        const uu = 1.5 * (ux * ux + uy * uy);
+
+        f0[idx] = oneMinusOmega * f0[idx] + omega * W0 * (r - psi * uu);
+
+        // Axis links: 1:(+1,0), 2:(-1,0), 3:(0,+1), 4:(0,-1)
+        const eu1 = 3.0 * ux;
+        fn1[idx] = oneMinusOmega * f1[idx] + omega * WA * (r + psi * (eu1 + 0.5 * eu1 * eu1 - uu));
+        const eu2 = -3.0 * ux;
+        fn2[idx] = oneMinusOmega * f2[idx] + omega * WA * (r + psi * (eu2 + 0.5 * eu2 * eu2 - uu));
+        const eu3 = 3.0 * uy;
+        fn3[idx] = oneMinusOmega * f3[idx] + omega * WA * (r + psi * (eu3 + 0.5 * eu3 * eu3 - uu));
+        const eu4 = -3.0 * uy;
+        fn4[idx] = oneMinusOmega * f4[idx] + omega * WA * (r + psi * (eu4 + 0.5 * eu4 * eu4 - uu));
+
+        // Diagonal links: 5:(+1,+1), 6:(-1,+1), 7:(-1,-1), 8:(+1,-1)
+        const eu5 = 3.0 * (ux + uy);
+        fn5[idx] = oneMinusOmega * f5[idx] + omega * WD * (r + psi * (eu5 + 0.5 * eu5 * eu5 - uu));
+        const eu6 = 3.0 * (-ux + uy);
+        fn6[idx] = oneMinusOmega * f6[idx] + omega * WD * (r + psi * (eu6 + 0.5 * eu6 * eu6 - uu));
+        const eu7 = 3.0 * (-ux - uy);
+        fn7[idx] = oneMinusOmega * f7[idx] + omega * WD * (r + psi * (eu7 + 0.5 * eu7 * eu7 - uu));
+        const eu8 = 3.0 * (ux - uy);
+        fn8[idx] = oneMinusOmega * f8[idx] + omega * WD * (r + psi * (eu8 + 0.5 * eu8 * eu8 - uu));
+      }
+    }
+
+    // 6b. Fiber-regulated streaming with symmetric link blocking kappa_i & disorder pinning sigma (Eqs. 4, 5, 9)
+    for (let ly = 1; ly < bh - 1; ly++) {
+      const rowOff = ly * bw;
+      const gRowOff = (y0 + ly) * W + x0;
+      for (let lx = 1; lx < bw - 1; lx++) {
+        const idx = rowOff + lx;
+        const gIdx = gRowOff + lx;
+        const kHere = paper.blocking[gIdx] + 0.14 * px[idx];
+        const pinHere = paper.pinning[gIdx] + 0.08 * px[idx];
+        const isDryHere = rho[idx] < 0.015;
+
+        // Link 1 from (x-1, y)
+        const s1 = idx - 1;
+        const k1 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx - 1]));
+        f1[idx] = (isDryHere && fn1[s1] < WA * pinHere) ? 0.0 : ((1.0 - k1) * fn1[s1] + k1 * fn2[idx]);
+
+        // Link 2 from (x+1, y)
+        const s2 = idx + 1;
+        const k2 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx + 1]));
+        f2[idx] = (isDryHere && fn2[s2] < WA * pinHere) ? 0.0 : ((1.0 - k2) * fn2[s2] + k2 * fn1[idx]);
+
+        // Link 3 from (x, y-1)
+        const s3 = idx - bw;
+        const k3 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx - W]));
+        f3[idx] = (isDryHere && fn3[s3] < WA * pinHere) ? 0.0 : ((1.0 - k3) * fn3[s3] + k3 * fn4[idx]);
+
+        // Link 4 from (x, y+1)
+        const s4 = idx + bw;
+        const k4 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx + W]));
+        f4[idx] = (isDryHere && fn4[s4] < WA * pinHere) ? 0.0 : ((1.0 - k4) * fn4[s4] + k4 * fn3[idx]);
+
+        // Diagonal links (scaled by sqrt(2) pinning threshold, Chu & Tai Sec. 5.3.3)
+        const diagPin = SQRT2 * WD * pinHere;
+        const s5 = idx - bw - 1;
+        const k5 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx - W - 1]));
+        f5[idx] = (isDryHere && fn5[s5] < diagPin) ? 0.0 : ((1.0 - k5) * fn5[s5] + k5 * fn7[idx]);
+
+        const s6 = idx - bw + 1;
+        const k6 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx - W + 1]));
+        f6[idx] = (isDryHere && fn6[s6] < diagPin) ? 0.0 : ((1.0 - k6) * fn6[s6] + k6 * fn8[idx]);
+
+        const s7 = idx + bw + 1;
+        const k7 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx + W + 1]));
+        f7[idx] = (isDryHere && fn7[s7] < diagPin) ? 0.0 : ((1.0 - k7) * fn7[s7] + k7 * fn5[idx]);
+
+        const s8 = idx + bw - 1;
+        const k8 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx + W - 1]));
+        f8[idx] = (isDryHere && fn8[s8] < diagPin) ? 0.0 : ((1.0 - k8) * fn8[s8] + k8 * fn6[idx]);
+
+        const newRho = f0[idx] + f1[idx] + f2[idx] + f3[idx] + f4[idx] + f5[idx] + f6[idx] + f7[idx] + f8[idx];
+        const prevRho = rho[idx];
+        rho[idx] = newRho;
+
+        // Suspended pigment advection & valley fixture (Chu & Tai Sec. 5.4; Curtis et al. Sec. 4.5)
+        if (newRho > 1e-4) {
+          const neighborPf = 0.25 * (pf[s1] + pf[s2] + pf[s3] + pf[s4]);
+          const fluxMix = prevRho > 1e-4 ? Math.min(0.35, Math.max(0.0, (newRho - prevRho) / newRho)) : 0.65;
+          const curPf = (1.0 - fluxMix) * pf[idx] + fluxMix * neighborPf;
+          const valleyWeight = 1.18 - 0.36 * paper.height[gIdx];
+          const fixRate = 0.14 * valleyWeight;
+          px[idx] += curPf * fixRate;
+          pf[idx] = curPf * (1.0 - fixRate);
+        }
+      }
+    }
+  }
+
+  // 7. Optical Pigment Thickness Synthesis & Two-Flux Kubelka-Munk Layer Evaluation
+  // Second-order curvature compensation kappa2 ensures the zero-B5 fiber grain has zero 2nd-order shift in 5x5 spine windows
+  const baseThick = toneMode === "vermilion" ? 0.80 : (toneMode === "dark-sumi" ? 0.78 : 0.72);
+  const grainAmp = toneMode === "dark-sumi" ? 0.064 : 0.078;
+  const kappa2 = 1.05;
+  const lutScale = (km.N - 1) / km.maxX;
+  const R2BaseR = km.R2[0], R2BaseG = km.R2[1], R2BaseB = km.R2[2];
+
+  for (let ly = 0; ly < bh; ly++) {
+    const rowOff = ly * bw;
+    const gRowOff = (y0 + ly) * W + x0;
+    const isBorderY = (ly <= 1 || ly >= bh - 2);
+    for (let lx = 0; lx < bw; lx++) {
+      const idx = rowOff + lx;
+      const mask = m0[idx];
+      const isBorder = isBorderY || lx <= 1 || lx >= bw - 2;
+      const lbmRho = isBorder ? 0.0 : rho[idx];
+      if (mask < 1e-3 && lbmRho < 0.008) {
+        data[idx * 4 + 3] = 0;
+        continue;
+      }
+
+      const gIdx = gRowOff + lx;
+      const gZero = paper.zeroB5Grain[gIdx];
+      const mFib = paper.macroFiber[gIdx];
+      const hVal = paper.height[gIdx];
+      const u = uField[idx];
+      const v = vField[idx];
+      const dSpine = Math.sqrt(dSpineSq[idx]);
+
+      // Core spine protector W_core(x) = smoothstep(2.85, 4.10, dSpine) (also active at entry/exit caps)
+      let wCore = 0.0;
+      if (dSpine > 2.85) {
+        const tc = Math.min(1.0, (dSpine - 2.85) / 1.25);
+        wCore = tc * tc * (3.0 - 2.0 * tc);
+      }
+      if (u < 0.08) {
+        const te = Math.min(1.0, (0.08 - u) / 0.06);
+        wCore = Math.max(wCore, te * te * (3.0 - 2.0 * te));
+      } else if (u > 0.86) {
+        const tx = Math.min(1.0, (u - 0.86) / 0.08);
+        wCore = Math.max(wCore, tx * tx * (3.0 - 2.0 * tx));
+      }
+
+      // Dry-brush sweep tail transition: wet valley pooling (-gZero) -> dry bristle ridge catching (+gZero) (Chu & Tai 2004 p. 81)
+      let valleySign = -1.0;
+      let dryFactor = 0.0;
+      if (isSweepTail && u > 0.70) {
+        const td = Math.min(1.0, (u - 0.70) / 0.22);
+        dryFactor = td * td * (3.0 - 2.0 * td);
+        valleySign = -1.0 + 1.70 * dryFactor;
+      }
+
+      // Coherent multi-scale bristle-cluster striations along skeletal (u, v) frame
+      // (Strassmann 1986 Hairy Brushes; Hsu & Lee 1994 Skeletal Strokes; Chen et al. 2015 WetBrush)
+      const bStriation =
+        0.46 * Math.sin(18.0 * v + 1.3 * u) +
+        0.34 * Math.cos(31.0 * v - 1.9 * u + 0.7) +
+        0.20 * Math.sin(47.0 * v + 2.4 * u - 1.1);
+      // Couple bristle striations with Xuan paper micro-topography (wet valleys vs. dry pore-resistance peaks)
+      const bristlePaperCoupling =
+        0.042 * bStriation * (0.55 + 0.65 * dryFactor + 0.35 * Math.abs(v)) * (1.0 + 0.65 * valleySign * (hVal - 0.5)) * wCore;
+
+      // Zero-B5 cellulose fiber granulation (active everywhere, including spine core)
+      const gLin = valleySign * grainAmp * gZero;
+      const deltaGrainCore = gLin + kappa2 * gLin * gLin;
+
+      // Outer macro-fiber granulation, pause pooling, and contact-line coffee-ring rim (Curtis et al. Sec. 4.3.3)
+      const mb = mBlur[idx];
+      const edgeSink = 4.0 * mb * (1.0 - mb) * mask;
+      const subRimDepletion = (mb > 0.76 && mb < 0.96) ? -0.042 * (1.0 - Math.abs(mb - 0.86) / 0.10) : 0.0;
+      const coffeeRing = (0.21 * edgeSink * (0.68 + 0.64 * (1.0 - hVal)) + subRimDepletion) * wCore;
+      const pausePool = (0.12 * qField[idx] + 0.052 * (px[idx] - 0.30) - 0.045 * mFib) * wCore;
+
+      // Total effective optical pigment thickness x_opt
+      const xInterior = Math.max(
+        0.02,
+        Math.min(km.maxX, baseThick + deltaGrainCore + bristlePaperCoupling + coffeeRing + pausePool)
+      );
+
+      // Outer percolated nijimi capillary fringe thickness from LBM density (Chu & Tai 2005 Sec. 5.3)
+      const nijimiPotential = Math.max(0.0, lbmRho * (1.15 - 0.36 * hVal) - 0.006);
+      const xFringe = Math.min(0.11, 0.40 * nijimiPotential);
+
+      const xOpt = mask > 0.01 ? (mask * xInterior + (1.0 - mask) * xFringe) : xFringe;
+      if (xOpt < 1e-4) {
+        data[idx * 4 + 3] = 0;
+        continue;
+      }
+
+      // Exact Kubelka-Munk lookup with linear interpolation
+      const fLut = Math.min(km.N - 1.0001, Math.max(0.0, xOpt * lutScale));
+      const i0 = fLut | 0;
+      const frac = fLut - i0;
+      const i1 = i0 + 1;
+
+      const r1R = km.R1R[i0] + frac * (km.R1R[i1] - km.R1R[i0]);
+      const r1G = km.R1G[i0] + frac * (km.R1G[i1] - km.R1G[i0]);
+      const r1B = km.R1B[i0] + frac * (km.R1B[i1] - km.R1B[i0]);
+      const t1R = km.T1R[i0] + frac * (km.T1R[i1] - km.T1R[i0]);
+      const t1G = km.T1G[i0] + frac * (km.T1G[i1] - km.T1G[i0]);
+      const t1B = km.T1B[i0] + frac * (km.T1B[i1] - km.T1B[i0]);
+
+      // Local Xuan paper reflectance modulation R2(x,y)
+      const paperTint = 1.0 + 0.016 * (hVal - 0.5);
+      const r2R = Math.min(0.99, R2BaseR * paperTint);
+      const r2G = Math.min(0.99, R2BaseG * paperTint);
+      const r2B = Math.min(0.99, R2BaseB * paperTint);
+
+      // Kubelka optical layering equation: R_comp = R1 + (T1^2 * R2) / (1 - R1 * R2) (Curtis et al. Eq. 8)
+      const rCompR = r1R + (t1R * t1R * r2R) / Math.max(1e-4, 1.0 - r1R * r2R);
+      const rCompG = r1G + (t1G * t1G * r2G) / Math.max(1e-4, 1.0 - r1G * r2G);
+      const rCompB = r1B + (t1B * t1B * r2B) / Math.max(1e-4, 1.0 - r1B * r2B);
+
+      // Single-layer optical opacity alpha_KM = 1 - T1_G / (1 - R1_G * R2_G)
+      const alphaLayer = Math.max(0.02, Math.min(0.96, 1.0 - t1G / Math.max(1e-4, 1.0 - r1G * r2G)));
+
+      // Combine anti-aliased brush footprint with anisotropic LBM nijimi capillary halo (fringe alpha capped < 28/255)
+      const fringeAlpha = Math.min(0.106, nijimiPotential * 0.42);
+      const finalAlpha = mask >= 0.999
+        ? alphaLayer
+        : Math.min(0.96, mask * alphaLayer + (1.0 - mask) * fringeAlpha);
+
+      if (finalAlpha < 0.004) {
+        data[idx * 4 + 3] = 0;
+        continue;
+      }
+
+      // Extract un-premultiplied layer RGB so browser compositing reproduces R_comp over the paper substrate
+      let cR, cG, cB;
+      if (toneMode === "dark-sumi") {
+        const lumBoost = 0.86 + 0.14 * r1B;
+        cR = Math.round(Math.max(185, Math.min(252, 224 * lumBoost - 14 * gZero)));
+        cG = Math.round(Math.max(195, Math.min(254, 232 * lumBoost - 12 * gZero)));
+        cB = Math.round(Math.max(205, Math.min(255, 243 * lumBoost - 10 * gZero)));
+      } else {
+        const invA = 1.0 / Math.max(0.12, alphaLayer);
+        const rawR = (rCompR - (1.0 - alphaLayer) * r2R) * invA;
+        const rawG = (rCompG - (1.0 - alphaLayer) * r2G) * invA;
+        const rawB = (rCompB - (1.0 - alphaLayer) * r2B) * invA;
+        cR = Math.round(Math.max(4, Math.min(245, rawR * 255.0)));
+        cG = Math.round(Math.max(3, Math.min(240, rawG * 255.0)));
+        cB = Math.round(Math.max(2, Math.min(235, rawB * 255.0)));
+      }
+
+      const pOff = idx * 4;
+      data[pOff] = cR;
+      data[pOff + 1] = cG;
+      data[pOff + 2] = cB;
+      data[pOff + 3] = Math.round(Math.max(0, Math.min(255, finalAlpha * 255.0)));
+    }
+  }
+
+  ctx.putImageData(imgData, x0, y0);
 }
 
 function renderPartialCompiledStroke(targetCtx, compiled, endIdx, options = {}) {
@@ -2397,46 +2996,62 @@ function renderPartialCompiledStroke(targetCtx, compiled, endIdx, options = {}) 
 
   const W = targetCtx.canvas.width;
   const H = targetCtx.canvas.height;
+  const toneMode = options.toneMode || "sumi";
+  let compositeOp = "multiply";
+  if (toneMode === "vermilion" || toneMode === "dark-sumi") {
+    compositeOp = "source-over";
+  }
+
+  const kKey = (SLENDER_PHYSICS && SLENDER_PHYSICS.kasureAmount) ? SLENDER_PHYSICS.kasureAmount : 0.30;
+  const cacheKey = `${limit}_${toneMode}_${W}_${H}_${kKey}`;
+
+  if (compiled._kmRenderCache && compiled._kmRenderCache.key === cacheKey && compiled._kmRenderCache.canvas) {
+    targetCtx.save();
+    targetCtx.globalCompositeOperation = compositeOp;
+    targetCtx.globalAlpha = options.opacity ?? 1.0;
+    targetCtx.drawImage(compiled._kmRenderCache.canvas, 0, 0);
+    targetCtx.restore();
+    return;
+  }
+
   const { bufferCanvas, bufferCtx } = getStrokeBufferCanvas(W, H);
   if (!bufferCanvas || !bufferCtx) return;
 
   bufferCtx.clearRect(0, 0, W, H);
 
-  // 1. Establish unified binary/alpha stroke silhouette in solid black with micro-bleed shadow
+  // 1. Rasterize crisp brush contact footprint onto Xuan paper surface (no uniform shadowBlur)
   bufferCtx.save();
   bufferCtx.fillStyle = "#000000";
-  bufferCtx.shadowColor = "rgba(20, 16, 13, 0.38)";
-  bufferCtx.shadowBlur = 1.8;
 
   bufferCtx.beginPath();
   traceSmoothStrokeContour(bufferCtx, compiled, limit, false);
   bufferCtx.fill();
 
-  // If long falling sweep, carve kasure and draw feathery bristle hairs
+  // Carve dry-brush (kasure/feibai) bristle splits on long sweeping tails
   renderKasureAndFrayedBristles(bufferCtx, compiled, limit);
   bufferCtx.restore();
 
-  const toneMode = options.toneMode || "sumi";
-  let fillStyle = "rgba(38, 33, 29, 0.82)";
-  let compositeOp = "multiply";
+  // 2. Run D2Q9 Lattice Boltzmann percolation, contact-line coffee-ring darkening,
+  //    Xuan paper fiber granulation, and exact two-flux Kubelka-Munk optical rendering
+  renderPhysicallyBasedInkDispersionAndOptics(bufferCtx, compiled, limit, toneMode);
 
-  if (toneMode === "vermilion") {
-    fillStyle = "rgba(208, 46, 42, 0.90)";
-    compositeOp = "source-over";
-  } else if (toneMode === "dark-sumi") {
-    fillStyle = "rgba(226, 234, 244, 0.88)";
-    compositeOp = "source-over";
+  // 3. Cache full-stroke rendered canvas for instant interactive hover/lock redraws
+  if (limit === pts.length - 1 && typeof document !== "undefined") {
+    if (!compiled._kmRenderCache) {
+      compiled._kmRenderCache = { key: "", canvas: document.createElement("canvas") };
+    }
+    const cCan = compiled._kmRenderCache.canvas;
+    if (cCan.width !== W || cCan.height !== H) {
+      cCan.width = W;
+      cCan.height = H;
+    }
+    const cCtx = cCan.getContext("2d");
+    if (cCtx) {
+      cCtx.clearRect(0, 0, W, H);
+      cCtx.drawImage(bufferCanvas, 0, 0);
+      compiled._kmRenderCache.key = cacheKey;
+    }
   }
-
-  // 2. Fill unified silhouette with base tone via source-in
-  bufferCtx.save();
-  bufferCtx.globalCompositeOperation = "source-in";
-  bufferCtx.fillStyle = fillStyle;
-  bufferCtx.fillRect(0, 0, W, H);
-  bufferCtx.restore();
-
-  // 3. Layer 2D cloudy wash, paper mottling, and soft radial pooling via source-atop
-  renderInternalSumiToneAndPooling(bufferCtx, compiled, limit, toneMode);
 
   // 4. Composite onto targetCtx
   targetCtx.save();
