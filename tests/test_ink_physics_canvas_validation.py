@@ -408,3 +408,73 @@ def test_virtual_chinese_brush_tuft_mechanics_and_bristle_evolution() -> None:
     assert data["highSqueeze"]["maxSqueeze"] > data["lowSqueeze"]["maxSqueeze"] + 0.25
     assert data["highSqueeze"]["wetnessDepletion"] > 0.01
     assert data["highSqueeze"]["bellyDepletion"] > 0.005
+
+
+def test_boundary_evaporation_trims_nijimi_fringe() -> None:
+    """MoXi Sec. 5.3.4: evaporation at the pinned wet front narrows the nijimi fringe."""
+    char_strokes = extract_strokes_for_characters(["永"])
+    app_js = APP_JS_PATH.read_text(encoding="utf-8")
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<canvas id="c" width="792" height="792"></canvas>
+<script>{app_js}</script>
+<script>
+(function() {{
+  const strokes = {json.dumps(char_strokes["永"])};
+  const ctx = document.getElementById("c").getContext("2d", {{ willReadFrequently: true }});
+  const W = 792, H = 792;
+  const s1 = strokes[1];
+
+  function measure(evaporation) {{
+    resetInkPhysicsSettings();
+    LBM_TUNING.boundaryEvaporation = evaporation;
+    updateInkPhysicsParameter("coffeeRingIntensity", 1.45);
+    updateInkPhysicsParameter("nijimiIntensity", 1.65);
+    ctx.clearRect(0, 0, W, H);
+    const compiled = compileStrokePhysics({{ d: s1.d, type: s1.type, component: s1.component, index: 2 }}, 0, 0, W, strokes.length);
+    renderFullCompiledStroke(ctx, compiled, {{ toneMode: "sumi", opacity: 1.0 }});
+    const raw = ctx.getImageData(0, 0, W, H).data;
+    let fringe = 0;
+    for (let i = 3; i < raw.length; i += 4) {{
+      if (raw[i] > 0 && raw[i] <= 40) fringe++;
+    }}
+    return {{ fringe }};
+  }}
+
+  const noEvap = measure(0.0);
+  const withEvap = measure(0.006);
+  resetInkPhysicsSettings();
+
+  const out = document.createElement("script");
+  out.id = "evap-out";
+  out.type = "application/json";
+  out.textContent = JSON.stringify({{ noEvap, withEvap }});
+  document.body.appendChild(out);
+}})();
+</script>
+</body>
+</html>"""
+
+    with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
+        f.write(html)
+        tmp_path = f.name
+
+    try:
+        proc = subprocess.run(
+            [find_chrome_binary(), "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", f"file://{tmp_path}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    m = re.search(r'<script id="evap-out" type="application/json">(.*?)</script>', proc.stdout, re.DOTALL)
+    assert m, f"Missing evap-out JSON in stdout: {proc.stderr[:500]}"
+    data = json.loads(m.group(1))
+
+    assert data["noEvap"]["fringe"] > 0
+    assert data["withEvap"]["fringe"] < data["noEvap"]["fringe"], data

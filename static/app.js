@@ -1426,7 +1426,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
   }
 
   // ===========================================================================
-  // Virtual Chinese Brush Mechanics Pass (Chu & Tai 2002/2004; Baxter & Lin 2004;
+  // Virtual Chinese Brush Mechanics Pass (Chu & Tai 2002/2004;
   // Xie et al. 2013; Xu et al. 2003/2004; Chen et al. 2015 WetBrush; Strassmann 1986)
   // ===========================================================================
   const coreMantleParam = SLENDER_PHYSICS.coreMantleContrast ?? 1.35;
@@ -1440,6 +1440,16 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     while (a > Math.PI) a -= 2.0 * Math.PI;
     while (a < -Math.PI) a += 2.0 * Math.PI;
     return a;
+  }
+
+  // Heavier tuft load => slower, more deliberate travel (shared by the running and per-sample estimates)
+  function tuftSpeedEst(pLoad) {
+    return Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, pLoad));
+  }
+
+  // WetBrush inter-hair packing density psi from load, dwell pooling and tuft obliqueness (Chen et al. 2015 Sec. 5.1)
+  function bristlePacking(pLoad, poolWeight, sinPsi) {
+    return Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * poolWeight + 0.16 * Math.abs(sinPsi)));
   }
 
   // Initial entry attack posture (Lufeng 露鋒 oblique tip attack vs. Cangfeng 藏鋒 pore-pinned entry)
@@ -1485,9 +1495,10 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         }
       }
 
-      // Wet tuft capillary plasticity zero-shifting rho = clamp(theta', -alpha(w), alpha(w)) (Chu & Tai 2002 Sec. 4.2.3; Baxter & Lin 2004 Eq. 15)
+      // Wet tuft capillary plasticity zero-shifting rho = clamp(theta', -alpha(w), alpha(w)) (Chu & Tai 2002 Sec. 4.2.3; Chu & Tai 2004 p. 79)
+      // Zero-shifted rest angle rho = clamp(theta', -alpha, alpha) from the previous frame's bend theta' (= psiOblique here)
       const alphaWet = 0.30 * wTip * Math.min(1.75, 0.45 + 0.55 * plasticityParam);
-      plasticRho = Math.max(-alphaWet, Math.min(alphaWet, 0.80 * plasticRho + 0.20 * psiOblique));
+      plasticRho = Math.max(-alphaWet, Math.min(alphaWet, psiOblique));
 
       // Quasi-static elastica restoring relaxation toward zero-shifted plastic rest angle
       const relaxRate = Math.max(0.04, Math.min(0.46, (dsStep * poreLead / (charTuftLen * 0.16)) * (0.68 + 0.32 * plasticityParam)));
@@ -1500,17 +1511,19 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       tuftEllipticity = 0.72 * tuftEllipticity + 0.28 * targetEllip;
 
       // WetBrush inter-hair packing density & spherical-cap compression release (Chen et al. 2015 Sec. 5.1, Eqs. 12-13)
-      const packPsi = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(Math.sin(psiOblique))));
+      const packPsi = bristlePacking(pLoad, rawPoolWeight[i], Math.sin(psiOblique));
       const potCapMPrime = Math.max(0.22, 1.0 - 0.50 * packPsi);
       const pClamp = Math.min(1.2, pLoad);
       const contactCapM = potCapMPrime - 0.24 * pClamp * pClamp * (1.0 - 0.25 * pClamp);
-      const stepFrac = dsStep / Math.max(16.0, origLen);
-      const speedEst = Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, pLoad));
+      // Xu et al. 2004 Eqs. 14/17: ink loss grows with distance travelled, so blend an absolute 60-unit reference with the
+      // per-stroke normalisation (Strassmann 1986 Sec. 4.1 sets the dip per stroke length) instead of fully normalising
+      const stepFrac = dsStep / Math.max(24.0, 0.5 * (origLen + 60.0));
+      const speedEst = tuftSpeedEst(pLoad);
       const innerStress = (pLoad * tuftEllipticity * speedEst) / Math.max(0.22, wTip);
       const chiInteract = speedEst * innerStress * stepFrac;
       const compSqueeze = Math.max(0.0, wBelly - contactCapM) * (0.60 + 0.40 * squeezeParam) + 0.28 * rawPoolWeight[i] * squeezeParam;
 
-      // Two-compartment axial wetness depletion & belly-to-tip capillary recharge (Xu et al. 2004 Eq. 17; Strassmann 1986)
+      // Two-compartment axial wetness depletion (Xu et al. 2004 Eq. 17); the belly-to-tip capillary recharge term is a heuristic of this model, not taken from a paper
       wTip = Math.max(
         0.20,
         Math.min(1.0, wTip - 0.30 * chiInteract + 0.24 * (wBelly - wTip) + 0.10 * compSqueeze * stepFrac)
@@ -1523,10 +1536,10 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
 
     const sinPsi = Math.sin(psiOblique);
     // WetBrush instantaneous compression squeeze-out & inner stress (Chen et al. 2015 Eqs. 12-13; Xu et al. 2004 Eqs. 12, 14; Xu et al. 2003 Sec. 3.1)
-    const packHere = Math.max(0.10, Math.min(0.92, 0.36 * pLoad + 0.24 * rawPoolWeight[i] + 0.16 * Math.abs(sinPsi)));
+    const packHere = bristlePacking(pLoad, rawPoolWeight[i], sinPsi);
     const capHere = Math.max(0.22, 1.0 - 0.50 * packHere) - 0.20 * Math.min(1.2, pLoad) * Math.min(1.2, pLoad);
     const squeezeHere = (Math.max(0.0, wBelly - capHere) * 0.65 + 0.32 * rawPoolWeight[i]) * (0.55 + 0.45 * squeezeParam);
-    const speedHere = Math.max(0.32, 1.30 - 0.45 * Math.min(1.5, pLoad));
+    const speedHere = tuftSpeedEst(pLoad);
     const stressHere = (pLoad * tuftEllipticity * speedHere) / Math.max(0.22, wTip);
 
     // Jianhao (兼毫) stiff rabbit/weasel inner core vs. compliant goat-hair outer mantle contact fraction (Chu & Tai 2002 Sec. 3)
@@ -2186,7 +2199,7 @@ function getXuanPaperSubstrate(w, h) {
   const blocking = new Float32Array(n);
   const pinning = new Float32Array(n);
 
-  // 1. Synthesize tangled wingceltis (qingtan) & mulberry bark fiber filaments (Chu & Tai 2005 Sec. 6.2)
+  // 1. Synthesize tangled wingceltis (qingtan) & mulberry bark fiber filaments (paper-fibre texture after Chu & Tai 2005 Sec. 6.2, which uses scanned paper hair textures)
   let seed = 314159265;
   function rand01() {
     seed = (seed * 1664525 + 1013904223) >>> 0;
@@ -2351,8 +2364,8 @@ function getXuanPaperSubstrate(w, h) {
       const hVal = Math.max(0.04, Math.min(0.96, 0.50 + 0.28 * gZero + 0.20 * mFib));
       height[idx] = hVal;
 
-      // Fluid capacity c(x,y): deep inter-fiber pore valleys (low hVal) hold greater capillary fluid volume (Curtis et al. 1997 Sec. 4.1)
-      capacity[idx] = (1.0 - hVal) * (cMax - cMin) + cMin;
+      // Fluid capacity c = h * (c_max - c_min) + c_min (Curtis et al. 1997 Sec. 4.1): raised fibre ridges hold more capillary fluid
+      capacity[idx] = hVal * (cMax - cMin) + cMin;
 
       // Alum sizing A(x,y) & porous blocking factor kappa_0(x,y) (Chu & Tai 2005 Eq. 6)
       const alum = 0.5 + 0.5 * Math.sin(x * 0.13 + y * 0.11 + 1.5 * gZero + 0.8 * fil);
@@ -2367,6 +2380,12 @@ function getXuanPaperSubstrate(w, h) {
   xuanPaperSubstrateCache = { w, h, zeroB5Grain, filamentMap, macroFiber, height, capacity, blocking, pinning };
   return xuanPaperSubstrateCache;
 }
+
+// Tunable LBM constants (mutable so tests can isolate individual mechanisms)
+const LBM_TUNING = {
+  // Boundary evaporation eps_s per relaxation step at coffeeRingIntensity = 1 (paper: <= 0.005 over hundreds of steps)
+  boundaryEvaporation: 0.006
+};
 
 /**
  * Reusable typed-array workspace for local bounding-box D2Q9 LBM percolation & pigment transport.
@@ -2386,6 +2405,10 @@ function getLbmWorkspace(maxCells) {
       rho: new Float32Array(maxCells),
       pf: new Float32Array(maxCells),
       px: new Float32Array(maxCells),
+      pfNext: new Float32Array(maxCells),
+      rhoStart: new Float32Array(maxCells),
+      uxField: new Float32Array(maxCells),
+      uyField: new Float32Array(maxCells),
       f0: new Float32Array(maxCells),
       f1: new Float32Array(maxCells),
       f2: new Float32Array(maxCells),
@@ -2410,7 +2433,7 @@ function getLbmWorkspace(maxCells) {
 
 /**
  * Precomputed Exact Two-Flux Kubelka-Munk Hyperbolic Reflectance (R1) & Transmittance (T1) Lookup Tables
- * Grounded in Curtis et al. (1997), "Computer-Generated Watercolor", SIGGRAPH '97, Sec. 5.1-5.2, Eqs. 6-8:
+ * Grounded in Curtis et al. (1997), "Computer-Generated Watercolor", SIGGRAPH '97, Sec. 5.2 (unnumbered Kubelka-Munk equations):
  *   a = 1 + K / S,  b = sqrt(a^2 - 1)
  *   R1(x) = sinh(b*S*x) / (a*sinh(b*S*x) + b*cosh(b*S*x))
  *   T1(x) = b / (a*sinh(b*S*x) + b*cosh(b*S*x))
@@ -2780,7 +2803,7 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
  * 2. Curtis et al. (1997), "Computer-Generated Watercolor", SIGGRAPH '97, 421-430.
  *    - Outward capillary replenishment & contact-line edge darkening (Sec. 4.3.3, Eq. 3)
  *    - Paper valley granulation vs. ridge thinning (Sec. 4.5)
- *    - Exact two-flux Kubelka-Munk hyperbolic reflectance R1(x) & transmittance T1(x) (Sec. 5.1-5.2, Eqs. 6-8)
+ *    - Exact two-flux Kubelka-Munk hyperbolic reflectance R1(x) & transmittance T1(x) (Sec. 5.2, unnumbered equations)
  * 3. Chu & Tai (2004), "Real-Time Painting with an Expressive Virtual Chinese Brush", IEEE CG&A 24(5), 76-85.
  *    - Dry-brush (feibai/kasure) peak catching on raised paper fibers (p. 81)
  */
@@ -2833,6 +2856,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const ws = getLbmWorkspace(nCells);
   const {
     m0, mBlur, mTemp, dSpineSq, uField, vField, qField, surfInk, rho, pf, px,
+    pfNext, rhoStart, uxField, uyField,
     f0, f1, f2, f3, f4, f5, f6, f7, f8,
     fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8
   } = ws;
@@ -2890,7 +2914,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
     const absV = Math.abs(vNorm);
     const clusterWave = 0.55 * Math.sin(6.5 * Math.PI * vNorm + (strokeSeed % 6.28)) + 0.45 * Math.cos(11.0 * Math.PI * vNorm - (strokeSeed % 3.14));
     const inCore = absV <= uCoreFracLut[0];
-    // Strassmann (1986) "short-changed" initial bristle ink reservoirs: core bristles start fuller than outer goat-hair mantle
+    // Initial per-bristle ink reservoirs (Strassmann 1986 Sec. 4.1: each bristle holds a finite quantity): core bristles start fuller than the outer goat-hair mantle (model choice)
     bState[m] = inCore ? (0.90 + 0.08 * clusterWave) : (0.74 + 0.18 * clusterWave);
   }
 
@@ -2940,6 +2964,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
     mBlur[i] = a;
     mTemp[i] = a;
     dSpineSq[i] = INF_DIST;
+    rhoStart[i] = 0.0;
     uField[i] = 0.5;
     vField[i] = 0.0;
     qField[i] = 0.0;
@@ -3061,7 +3086,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   }
 
   // 5. Initialize D2Q9 LBM fluid density rho, surface ink reservoir surfInk, and pigment layers pf, px
-  // D2Q9 lattice weights (Chu & Tai 2005 Sec. 5.3.2): w0 = 4/9, w1..4 = 1/9 (axis), w5..8 = 1/36 (diag)
+  // D2Q9 lattice weights (Chu & Tai 2005 Sec. 4): w0 = 4/9, w1..4 = 1/9 (axis), w5..8 = 1/36 (diag)
   const W0 = 4.0 / 9.0;
   const WA = 1.0 / 9.0;
   const WD = 1.0 / 36.0;
@@ -3123,19 +3148,24 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
           f8[idx] += WD * phi;
         }
 
+        rhoStart[idx] = r;
         if (r < 1e-4) {
           fn1[idx] = 0; fn2[idx] = 0; fn3[idx] = 0; fn4[idx] = 0;
           fn5[idx] = 0; fn6[idx] = 0; fn7[idx] = 0; fn8[idx] = 0;
+          uxField[idx] = 0.0; uyField[idx] = 0.0;
           continue;
         }
 
-        // Capillary pressure gradient + paper surface slope drainage velocity u (Curtis et al. Eq. 3)
+        // Mean-field velocity from the density gradient (stand-in for MoXi Eq. 4, u = sum e_i f_i / rho_0) plus a small paper-slope
+        // drift (cf. Curtis et al. 1997 Eqs. 1-2, where velocity responds to pressure and the height-field gradient)
         const dRhoX = rho[idx + 1] - rho[idx - 1];
         const dRhoY = rho[idx + bw] - rho[idx - bw];
         const dHX = paper.height[gIdx + 1] - paper.height[gIdx - 1];
         const dHY = paper.height[gIdx + W] - paper.height[gIdx - W];
         const ux = Math.max(-0.24, Math.min(0.24, -0.17 * dRhoX - 0.08 * dHX));
         const uy = Math.max(-0.24, Math.min(0.24, -0.17 * dRhoY - 0.08 * dHY));
+        uxField[idx] = ux;
+        uyField[idx] = uy;
 
         // Low-saturation advection weight psi(rho) = smoothstep(0, alphaSat, rho) (Chu & Tai Eq. 8)
         const tSat = Math.min(1.0, r / alphaSat);
@@ -3166,70 +3196,134 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       }
     }
 
-    // 6b. Fiber-regulated streaming with symmetric link blocking kappa_i & disorder pinning sigma (Eqs. 4, 5, 9)
+    // 6b. Fiber-regulated streaming with symmetric link blocking kappa_i & disorder pinning sigma (Chu & Tai 2005 Eqs. 5, 6, 9)
     const pinScale = Math.max(0.45, 1.15 - 0.25 * nijimiInt);
+    // Link tables: d = 0..7 <-> populations f1..f8, opposite link, upstream cell offsets (local grid and global paper grid)
+    const FA = [f1, f2, f3, f4, f5, f6, f7, f8];
+    const FN = [fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8];
+    const opp = [1, 0, 3, 2, 6, 7, 4, 5];
+    const srcOff = [-1, 1, -bw, bw, -bw - 1, -bw + 1, bw + 1, bw - 1];
+    const gSrcOff = [-1, 1, -W, W, -W - 1, -W + 1, W + 1, W - 1];
+    const kMaxLink = [0.88, 0.88, 0.88, 0.88, 0.90, 0.90, 0.90, 0.90];
+    const pinThr = [WA, WA, WA, WA, SQRT2 * WD, SQRT2 * WD, SQRT2 * WD, SQRT2 * WD];
     for (let ly = 1; ly < bh - 1; ly++) {
       const rowOff = ly * bw;
       const gRowOff = (y0 + ly) * W + x0;
       for (let lx = 1; lx < bw - 1; lx++) {
         const idx = rowOff + lx;
         const gIdx = gRowOff + lx;
-        const kHere = paper.blocking[gIdx] + 0.14 * px[idx];
-        const pinHere = (paper.pinning[gIdx] + 0.08 * px[idx]) * pinScale;
-        const isDryHere = rho[idx] < 0.015;
+        const kSelf = paper.blocking[gIdx] + 0.14 * px[idx];
+        const pinSelf = (paper.pinning[gIdx] + 0.08 * px[idx]) * pinScale;
+        const dryHere = rhoStart[idx] < 0.015;
 
-        // Link 1 from (x-1, y)
-        const s1 = idx - 1;
-        const k1 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx - 1]));
-        f1[idx] = (isDryHere && fn1[s1] < WA * pinHere) ? 0.0 : ((1.0 - k1) * fn1[s1] + k1 * fn2[idx]);
-
-        // Link 2 from (x+1, y)
-        const s2 = idx + 1;
-        const k2 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx + 1]));
-        f2[idx] = (isDryHere && fn2[s2] < WA * pinHere) ? 0.0 : ((1.0 - k2) * fn2[s2] + k2 * fn1[idx]);
-
-        // Link 3 from (x, y-1)
-        const s3 = idx - bw;
-        const k3 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx - W]));
-        f3[idx] = (isDryHere && fn3[s3] < WA * pinHere) ? 0.0 : ((1.0 - k3) * fn3[s3] + k3 * fn4[idx]);
-
-        // Link 4 from (x, y+1)
-        const s4 = idx + bw;
-        const k4 = Math.min(0.88, 0.5 * (kHere + paper.blocking[gIdx + W]));
-        f4[idx] = (isDryHere && fn4[s4] < WA * pinHere) ? 0.0 : ((1.0 - k4) * fn4[s4] + k4 * fn3[idx]);
-
-        // Diagonal links (scaled by sqrt(2) pinning threshold, Chu & Tai Sec. 5.3.3)
-        const diagPin = SQRT2 * WD * pinHere;
-        const s5 = idx - bw - 1;
-        const k5 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx - W - 1]));
-        f5[idx] = (isDryHere && fn5[s5] < diagPin) ? 0.0 : ((1.0 - k5) * fn5[s5] + k5 * fn7[idx]);
-
-        const s6 = idx - bw + 1;
-        const k6 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx - W + 1]));
-        f6[idx] = (isDryHere && fn6[s6] < diagPin) ? 0.0 : ((1.0 - k6) * fn6[s6] + k6 * fn8[idx]);
-
-        const s7 = idx + bw + 1;
-        const k7 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx + W + 1]));
-        f7[idx] = (isDryHere && fn7[s7] < diagPin) ? 0.0 : ((1.0 - k7) * fn7[s7] + k7 * fn5[idx]);
-
-        const s8 = idx + bw - 1;
-        const k8 = Math.min(0.90, 0.5 * (kHere + paper.blocking[gIdx + W - 1]));
-        f8[idx] = (isDryHere && fn8[s8] < diagPin) ? 0.0 : ((1.0 - k8) * fn8[s8] + k8 * fn6[idx]);
+        for (let d = 0; d < 8; d++) {
+          const s = idx + srcOff[d];
+          const gs = gIdx + gSrcOff[d];
+          const fnSrc = FN[d][s];
+          const fnOwn = FN[opp[d]][idx];
+          // Symmetric link blocking kappa_i: average of both linked sites (Eq. 5), identical from either end of the link
+          let k = Math.min(kMaxLink[d], 0.5 * (kSelf + paper.blocking[gs] + 0.14 * px[s]));
+          // Full bounce-back at pinned fronts (Sec. 5.3.3; diagonal thresholds scaled by sqrt(2)): a dry site stays pinned
+          // while the packet aimed at it is too weak to depin it. Both ends of the link evaluate the same condition so no
+          // mass is created or destroyed (the old code dropped the packet).
+          if (dryHere) {
+            if (fnSrc < pinThr[d] * pinSelf) k = 1.0;
+          } else if (rhoStart[s] < 0.015 && fnOwn < pinThr[d] * (paper.pinning[gs] + 0.08 * px[s]) * pinScale) {
+            k = 1.0;
+          }
+          FA[d][idx] = (1.0 - k) * fnSrc + k * fnOwn;
+        }
 
         const newRho = f0[idx] + f1[idx] + f2[idx] + f3[idx] + f4[idx] + f5[idx] + f6[idx] + f7[idx] + f8[idx];
         const prevRho = rho[idx];
         rho[idx] = newRho;
 
-        // Suspended pigment advection & valley fixture (Chu & Tai Sec. 5.4; Curtis et al. Sec. 4.5)
+        // Suspended pigment advection (Chu & Tai 2005 Sec. 5.4.2): flux-weighted inflow (Eq. 10) for sites that are
+        // becoming wet, method-of-characteristics back-tracing for already wet sites, then paper hindrance
+        pfNext[idx] = pf[idx];
         if (newRho > 1e-4) {
-          const neighborPf = 0.25 * (pf[s1] + pf[s2] + pf[s3] + pf[s4]);
-          const fluxMix = prevRho > 1e-4 ? Math.min(0.42, Math.max(0.0, (newRho - prevRho) / newRho)) : 0.72;
-          const curPf = (1.0 - fluxMix) * pf[idx] + fluxMix * neighborPf;
-          const valleyWeight = 1.24 - 0.48 * paper.height[gIdx];
-          const fixRate = 0.16 * valleyWeight;
-          px[idx] += curPf * fixRate;
-          pf[idx] = curPf * (1.0 - fixRate);
+          let pStar = pf[idx];
+          if (prevRho <= 1e-4) {
+            const fSum = f1[idx] + f2[idx] + f3[idx] + f4[idx] + f5[idx] + f6[idx] + f7[idx] + f8[idx];
+            if (fSum > 1e-6) {
+              pStar = (
+                f1[idx] * pf[idx - 1] + f2[idx] * pf[idx + 1] + f3[idx] * pf[idx - bw] + f4[idx] * pf[idx + bw] +
+                f5[idx] * pf[idx - bw - 1] + f6[idx] * pf[idx - bw + 1] + f7[idx] * pf[idx + bw + 1] + f8[idx] * pf[idx + bw - 1]
+              ) / fSum;
+            }
+          } else {
+            const ux = uxField[idx];
+            const uy = uyField[idx];
+            const sx = ux >= 0.0 ? -1 : 1;
+            const sy = uy >= 0.0 ? -1 : 1;
+            const ax = Math.abs(ux);
+            const ay = Math.abs(uy);
+            const iX = idx + sx;
+            const iY = idx + sy * bw;
+            const iXY = idx + sx + sy * bw;
+            // Never sample across the wet/dry boundary (any pf outside the boundary must not contribute)
+            if (rho[iX] > 1e-4 && rho[iY] > 1e-4 && rho[iXY] > 1e-4) {
+              pStar =
+                (1.0 - ax) * (1.0 - ay) * pf[idx] + ax * (1.0 - ay) * pf[iX] +
+                (1.0 - ax) * ay * pf[iY] + ax * ay * pf[iXY];
+            }
+          }
+          // SimulateHindrance: gamma* = lerp(1, gamma, smoothstep(0, varsigma, |u|)); pf = lerp(pf*, pf, gamma*)
+          const spd = Math.hypot(uxField[idx], uyField[idx]);
+          const tHind = Math.min(1.0, spd / 0.12);
+          const gammaStar = 1.0 + (0.35 - 1.0) * (tHind * tHind * (3.0 - 2.0 * tHind));
+          pfNext[idx] = pStar + (pf[idx] - pStar) * gammaStar;
         }
+      }
+    }
+
+    // 6c. Boundary evaporation of pinned wet-front sites (Chu & Tai 2005 Sec. 5.3.4; Curtis et al. 1997 edge darkening)
+    // followed by MoXi pigment fixture (Sec. 5.4.3): water loss concentrates and settles pigment at the rim.
+    // epsS is scaled up from the paper's 0 <= eps_s <= 0.005 because only a few relaxation steps are executed here.
+    const epsS = LBM_TUNING.boundaryEvaporation * ringInt;
+    const muFix = Math.max(0.0, Math.min(1.0, 0.30 + 0.10 * glueWarmth));
+    // Phase A: decide every evaporation amount from the un-modified density field (raster-order independent).
+    // mTemp is free here: it only served as the blur ping-pong buffer before the mask was copied into mBlur.
+    const evapAmt = mTemp;
+    for (let ly = 1; ly < bh - 1; ly++) {
+      const rowOff = ly * bw;
+      for (let lx = 1; lx < bw - 1; lx++) {
+        const idx = rowOff + lx;
+        const r0 = rho[idx];
+        const onFront = r0 > 1e-4 && (rho[idx - 1] < 0.015 || rho[idx + 1] < 0.015 || rho[idx - bw] < 0.015 || rho[idx + bw] < 0.015);
+        evapAmt[idx] = onFront ? Math.min(0.45 * r0, epsS) : 0.0;
+      }
+    }
+    // Phase B: apply evaporation, concentrate pigment, and run the pigment fixture.
+    for (let ly = 1; ly < bh - 1; ly++) {
+      const rowOff = ly * bw;
+      const gRowOff = (y0 + ly) * W + x0;
+      for (let lx = 1; lx < bw - 1; lx++) {
+        const idx = rowOff + lx;
+        const r0 = rho[idx];
+        let pfHere = pfNext[idx];
+        if (r0 > 1e-4) {
+          let rNow = r0;
+          const evap = evapAmt[idx];
+          if (evap > 0.0) {
+            rNow = r0 - evap;
+            const keep = rNow / r0;
+            f0[idx] *= keep; f1[idx] *= keep; f2[idx] *= keep; f3[idx] *= keep; f4[idx] *= keep;
+            f5[idx] *= keep; f6[idx] *= keep; f7[idx] *= keep; f8[idx] *= keep;
+            rho[idx] = rNow;
+            // Pigment mass is conserved while water leaves, so its concentration rises
+            pfHere = Math.min(2.0, pfHere / keep);
+          }
+          const gIdx = gRowOff + lx;
+          const startRho = rhoStart[idx];
+          const wLoss = Math.max(startRho - rNow, 0.0);
+          const lossFactor = startRho > 1e-4 ? Math.min(1.0, wLoss / startRho) : 0.0;
+          const t = Math.min(1.0, rNow / Math.max(1e-4, muFix));
+          const fixFactor = Math.max(lossFactor * (1.0 - t * t * (3.0 - 2.0 * t)), 0.16 * (1.24 - 0.48 * paper.height[gIdx]));
+          px[idx] += fixFactor * pfHere;
+          pfHere -= fixFactor * pfHere;
+        }
+        pf[idx] = pfHere;
       }
     }
   }
@@ -3312,7 +3406,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         valleySign = -1.0 + 1.85 * dryFactor;
       }
 
-      // Sample Virtual Chinese Brush longitudinal state at u (Chu & Tai 2002/2004; WetBrush 2015; Xie et al. 2013)
+      // Sample Virtual Chinese Brush longitudinal state at u (Chu & Tai 2002/2004; WetBrush 2015)
       const uLutF = Math.max(0.0, Math.min(N_BRUSH - 1.001, u * (N_BRUSH - 1)));
       const uIdx0 = uLutF | 0;
       const uFrac = uLutF - uIdx0;
@@ -3347,7 +3441,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       const bristlePaperCoupling =
         0.072 * bristleInt * bCombined * (0.55 + 0.75 * dryFactor + 0.40 * absV) * (1.0 + 0.70 * valleySign * (hVal - 0.5)) * wCore;
 
-      // Jianhao (兼毫) Core-to-Mantle Radial Profile (Chu & Tai 2002 Sec. 3, 2004 p. 78; Chen et al. 2015 WetBrush; Yu et al. 2003)
+      // Jianhao (兼毫) Core-to-Mantle Radial Profile (Chu & Tai 2002 Sec. 3 on hard/soft/combination brushes; Chu & Tai 2004 "Chinese Brushes" sidebar)
       // Stiff rabbit/weasel inner core (|v| <= coreRadiusHere) delivers denser central ink than the compliant goat-hair mid-mantle
       let jianhaoProfile = 0.0;
       if (absV <= coreRadiusHere) {
@@ -3359,7 +3453,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       }
 
       // Zhongfeng (中鋒) vs. Cefeng (側鋒) Tip-Edge vs. Belly-Edge Tonal & Meniscus Asymmetry
-      // (Xie et al. 2013 Sec. 4.1-4.3; Chu & Tai 2002/2004; Xu et al. 2004 Eq. 5)
+      // (Xie et al. 2013 Sec. 4.1 upright vs. oblique style; Chu & Tai 2002 Sec. 2; Xu et al. 2004 Eq. 5)
       const cefengModulation = 0.052 * cefengInt * cefengBiasHere * Math.sin(vClamped * (Math.PI * 0.5)) * wCore;
 
       // Zero-B5 cellulose fiber granulation (active everywhere, including spine core)
@@ -3395,9 +3489,13 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       );
 
       // Outer percolated nijimi capillary fringe thickness from LBM density (Chu & Tai 2005 Sec. 5.3)
+      // Pigment carried into the halo by the flow (pf + fixed px) sets how dark the fringe is: pigment-starved toes stay faint
+      // (Chu & Tai 2005 Sec. 2.2 feathering; Curtis et al. 1997 Sec. 5.2, thickness from flow + deposition layers)
+      const pigLoad = Math.max(0.0, Math.min(1.5, (pf[idx] + px[idx]) / 0.50));
+      const pigFactor = 0.60 + 0.40 * pigLoad;
       const nijimiPotential = Math.max(
         0.0,
-        lbmRho * (1.52 - 0.96 * hVal - 0.22 * fil) - 0.004 - 0.012 * Math.max(0.0, hVal - 0.48)
+        lbmRho * pigFactor * (1.52 - 0.96 * hVal - 0.22 * fil) - 0.004 - 0.012 * Math.max(0.0, hVal - 0.48)
       ) * Math.min(2.2, 0.78 * nijimiInt);
       const xFringe = Math.min(0.18, 0.52 * nijimiPotential);
 
@@ -3426,7 +3524,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
       const r2G = Math.min(0.99, R2BaseG * paperTint);
       const r2B = Math.min(0.99, R2BaseB * paperTint);
 
-      // Kubelka optical layering equation: R_comp = R1 + (T1^2 * R2) / (1 - R1 * R2) (Curtis et al. Eq. 8)
+      // Kubelka optical layering equation: R_comp = R1 + (T1^2 * R2) / (1 - R1 * R2) (Curtis et al. 1997 Sec. 5.2)
       const rCompR = r1R + (t1R * t1R * r2R) / Math.max(1e-4, 1.0 - r1R * r2R);
       const rCompG = r1G + (t1G * t1G * r2G) / Math.max(1e-4, 1.0 - r1G * r2G);
       const rCompB = r1B + (t1B * t1B * r2B) / Math.max(1e-4, 1.0 - r1B * r2B);
@@ -3454,7 +3552,7 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         continue;
       }
 
-      // Extract un-premultiplied layer RGB with multi-front colloidal glue/soot chromatic separation (Chu & Tai 2005 Sec. 5.4)
+      // Extract un-premultiplied layer RGB with multi-front colloidal glue/soot chromatic separation (artistic choice; not from Chu & Tai 2005, where glue only enters kappa, sigma and the fixture rate)
       let cR, cG, cB;
       if (toneMode === "dark-sumi") {
         const lumBoost = 0.84 + 0.16 * r1B;
