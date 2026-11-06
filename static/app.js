@@ -675,6 +675,29 @@ const DEFAULT_SLENDER_PHYSICS = {
 
 const SLENDER_PHYSICS = { ...DEFAULT_SLENDER_PHYSICS };
 
+/**
+ * Opt-in stroke-shape variants awaiting visual approval (see stroke_approval.html). All default to false so the
+ * established look is unchanged; each flag can be toggled independently at runtime.
+ *  - anchoredEnds:   stroke-end forms keep absolute lengths instead of stretching with stroke length (Hsu & Lee 1994 Sec. 4.1)
+ *  - ellipticalCaps: start/end caps follow the tuft cross-section ellipticity (Chu & Tai 2002 Sec. 4.1.2; Xu et al. 2004 Eq. 18)
+ *  - mitreCorners:   angle-scaled outer shoulder and a mitred outer join at sharp corners (Hsu & Lee 1994 Sec. 4.1, Fig. 5)
+ *  - strongCefeng:   oblique (Cefeng) posture visibly shifts the tuft toward one stroke edge (Xie et al. 2013 Sec. 4.1)
+ *  - dryKasure:      dry-brush splits driven by the simulated tuft wetness on every long stroke, opening tails (Chu & Tai 2004)
+ *  - wetDryTrim:     MoXi-style wet/dry boundary trimming with paper-fibre roughening of the silhouette (Chu & Tai 2005 Sec. 6.1)
+ */
+const STROKE_VARIANTS = {
+  anchoredEnds: false,
+  ellipticalCaps: false,
+  mitreCorners: false,
+  strongCefeng: false,
+  dryKasure: false,
+  wetDryTrim: false
+};
+
+function getStrokeVariantKey() {
+  return Object.keys(STROKE_VARIANTS).map(k => (STROKE_VARIANTS[k] ? "1" : "0")).join("");
+}
+
 const INK_PHYSICS_PRESETS = {
   standard: {
     label: "標準（生宣・兼毫中鋒）",
@@ -915,7 +938,8 @@ function getBrushCompileKey(phys) {
     p.tuftPlasticityElasticity ?? 1.25,
     p.reservoirCompressionSqueeze ?? 1.35,
     p.kasureAmount ?? 0.30,
-    p.nibAngleDeg ?? -40
+    p.nibAngleDeg ?? -40,
+    getStrokeVariantKey()
   ].join("_");
 }
 
@@ -1253,7 +1277,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
       }
     } else if (behavior.isRightNa) {
       // 捺 (nà / 磔) - clean gradual press to wave foot at u=0.72 without mid-stroke bulge, then crisp taper to point
-      const footU = 0.72;
+      const footU = STROKE_VARIANTS.anchoredEnds ? 1.0 - Math.min(0.28 * totalLen, 9.0) / Math.max(0.1, totalLen) : 0.72;
       if (u <= footU) {
         const t = u / footU;
         const swell = Math.pow(t, 1.15);
@@ -1305,7 +1329,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const bell = 0.5 * (1 + Math.cos(t * Math.PI));
           poolWeight = Math.max(poolWeight, 0.95 * bell);
           const isAcute = behavior.isPieZhe && cf.angle > 1.0;
-          const outerBoost = (isAcute ? 0.0 : 0.16) * tonMult;
+          const outerBoost = (isAcute ? 0.0 : (STROKE_VARIANTS.mitreCorners ? 0.06 + 0.26 * Math.sin(Math.min(cf.angle, Math.PI / 2)) : 0.16)) * tonMult;
           const innerPinch = isAcute ? 0.52 : 0.14;
           const innerFloor = isAcute ? 0.20 : 0.68;
 
@@ -1375,7 +1399,9 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
         } else {
           const lastCf = cornerFeatures.length > 0 ? cornerFeatures[cornerFeatures.length - 1] : null;
           const isPostCornerSweep = !!(lastCf && lastCf.u > 0.44);
-          const sweepStart = isPostCornerSweep ? lastCf.u : 0.43;
+          const sweepStart = isPostCornerSweep
+            ? lastCf.u
+            : (STROKE_VARIANTS.anchoredEnds ? Math.max(0.43, 1.0 - Math.min(0.57 * totalLen, 24.0) / Math.max(0.1, totalLen)) : 0.43);
           if (u > sweepStart) {
             const tSweep = (u - sweepStart) / (1 - sweepStart);
             const exp = isPostCornerSweep ? 0.82 : 0.98;
@@ -1550,10 +1576,15 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
 
     // Area/width-conserving Zhongfeng (中鋒) vs. Cefeng (側鋒) double-half-ellipse lateral shift
     // Preserves rawWL[i] + rawWR[i] exactly while shifting the stiff tip toward one boundary and the soft belly toward the other
-    const uStartFade = u < 0.06 ? (u / 0.06) * (u / 0.06) * (3.0 - 2.0 * (u / 0.06)) : 1.0;
+    // strongCefeng: a lufeng (exposed-tip) entry keeps a floor of the shift instead of starting centred
+    const uStartFloor = (STROKE_VARIANTS.strongCefeng && !isConcealedEntry) ? 0.6 : 0.0;
+    const uStartRaw = u < 0.06 ? (u / 0.06) * (u / 0.06) * (3.0 - 2.0 * (u / 0.06)) : 1.0;
+    const uStartFade = uStartFloor + (1.0 - uStartFloor) * uStartRaw;
     const uEndFade = u > 0.90 ? ((1.0 - u) / 0.10) * ((1.0 - u) / 0.10) * (3.0 - 2.0 * ((1.0 - u) / 0.10)) : 1.0;
     const wTot = rawWL[i] + rawWR[i];
-    const cefengShift = Math.max(-0.095, Math.min(0.095, 0.075 * cefengParam * sinPsi * uStartFade * uEndFade));
+    const cefengGain = STROKE_VARIANTS.strongCefeng ? 0.30 : 0.075;
+    const cefengCap = STROKE_VARIANTS.strongCefeng ? 0.40 : 0.095;
+    const cefengShift = Math.max(-cefengCap, Math.min(cefengCap, cefengGain * cefengParam * sinPsi * uStartFade * uEndFade));
     const shiftedL = rawWL[i] - 0.5 * wTot * cefengShift;
     rawWL[i] = wTot > 0.16 ? Math.max(0.08, Math.min(wTot - 0.08, shiftedL)) : rawWL[i];
     rawWR[i] = wTot - rawWL[i];
@@ -1839,6 +1870,44 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
+  // mitreCorners: replace the round outer join of sharp corners by a mitre vertex (bevelled when it would spike)
+  if (STROKE_VARIANTS.mitreCorners && !hookFeature) {
+    for (const cf of cornerFeatures) {
+      if (cf.angle < 0.55) continue;
+      if (behavior.isPieZhe && cf.angle > 1.0) continue;
+      const K = 5;
+      const iA = Math.max(1, cf.index - K);
+      const iB = Math.min(numSamples - 1, cf.index + K);
+      if (iB - iA < 4) continue;
+      const outerIsRight = cf.turnSign >= 0;
+      const getO = (idx) => outerIsRight ? { x: rawPts[idx].rx, y: rawPts[idx].ry } : { x: rawPts[idx].lx, y: rawPts[idx].ly };
+      const setO = (idx, pt) => {
+        if (outerIsRight) { rawPts[idx].rx = pt.x; rawPts[idx].ry = pt.y; } else { rawPts[idx].lx = pt.x; rawPts[idx].ly = pt.y; }
+      };
+      const pA = getO(iA);
+      const pB = getO(iB);
+      // Offset-line directions are the spine tangents on each side of the corner (straight segments, not the smoothed turn)
+      const tA = { x: rawPts[iA].tx, y: rawPts[iA].ty };
+      const tB = { x: rawPts[iB].tx, y: rawPts[iB].ty };
+      const det = tA.x * tB.y - tA.y * tB.x;
+      if (Math.abs(det) < 0.15) continue;
+      const wx = pB.x - pA.x;
+      const wy = pB.y - pA.y;
+      const tA_s = (wx * tB.y - wy * tB.x) / det;
+      const M = { x: pA.x + tA.x * tA_s, y: pA.y + tA.y * tA_s };
+      const rOuter = outerIsRight ? clampedRR[cf.index] : clampedRL[cf.index];
+      const miterLen = Math.hypot(M.x - rawPts[cf.index].x, M.y - rawPts[cf.index].y);
+      // Bevel instead of mitre when the spike would exceed 2.6 stroke half-widths or points backwards
+      if (!(tA_s > 0) || miterLen > 2.6 * Math.max(rOuter, 1e-3)) continue;
+      for (let j = iA + 1; j < iB; j++) {
+        const f = j <= cf.index ? (j - iA) / Math.max(1, cf.index - iA) : (j - cf.index) / Math.max(1, iB - cf.index);
+        const from = j <= cf.index ? pA : M;
+        const to = j <= cf.index ? M : pB;
+        setO(j, { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f });
+      }
+    }
+  }
+
   // Expanded corner features for geometry and evaluation
   const evalCornerFeatures = [...cornerFeatures];
   // Also detect short-stroke flick corner like 心 s3 (origLen < 25)
@@ -1877,6 +1946,48 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     boxSize,
     sweepStartU: 0.43,
     _brushCompileKey: getBrushCompileKey(SLENDER_PHYSICS)
+  };
+}
+
+/**
+ * Stroke end-cap control points shared by the SVG path and canvas contour tracers.
+ * Default: shallow quadratic exit cap / cubic entry cap (fractions of the local width).
+ * ellipticalCaps: half-elliptical caps whose depth follows the tuft cross-section ellipticity at that end.
+ */
+function strokeExitCapControls(compiled, lastL, lastR, endPt) {
+  const endMidX = (lastL.x + lastR.x) * 0.5;
+  const endMidY = (lastL.y + lastR.y) * 0.5;
+  const width = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y);
+  const isDot = compiled.behavior.isDot || compiled.behavior.isCrownDot;
+  if (STROKE_VARIANTS.ellipticalCaps) {
+    const E = Math.max(1.0, Math.min(1.8, endPt.tuftEllipticity ?? 1.0));
+    const depth = 0.5 * width * Math.max(isDot ? 0.50 : 0.42, Math.min(0.70, (isDot ? 0.50 : 0.42) + 0.32 * (E - 1.0)));
+    const cd = depth * (4.0 / 3.0);
+    return {
+      kind: "C",
+      c1x: lastL.x + endPt.tx * cd, c1y: lastL.y + endPt.ty * cd,
+      c2x: lastR.x + endPt.tx * cd, c2y: lastR.y + endPt.ty * cd
+    };
+  }
+  const capMult = compiled.behavior.isCrownDot ? 0.16 : (compiled.behavior.isDot ? 0.20 : 0.24);
+  const capSpan = width * capMult;
+  return { kind: "Q", qx: endMidX + endPt.tx * capSpan, qy: endMidY + endPt.ty * capSpan };
+}
+
+function strokeEntryCapControls(compiled, firstL, firstR, p0) {
+  const width = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y);
+  const isDot = compiled.behavior.isDot || compiled.behavior.isCrownDot;
+  let back;
+  if (STROKE_VARIANTS.ellipticalCaps) {
+    const E = Math.max(1.0, Math.min(1.8, p0.tuftEllipticity ?? 1.0));
+    const depth = 0.5 * width * Math.max(isDot ? 0.40 : 0.32, Math.min(0.60, (isDot ? 0.40 : 0.32) + 0.30 * (E - 1.0)));
+    back = depth * (4.0 / 3.0);
+  } else {
+    back = width * (isDot ? 0.18 : 0.20) * 0.4;
+  }
+  return {
+    c1x: firstR.x - p0.tx * back, c1y: firstR.y - p0.ty * back,
+    c2x: firstL.x - p0.tx * back, c2y: firstL.y - p0.ty * back
   };
 }
 
@@ -1921,17 +2032,13 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
     const tipX = (lastL.x + lastR.x) * 0.5 + endPt.tx * tipExt;
     const tipY = (lastL.y + lastR.y) * 0.5 + endPt.ty * tipExt;
     d += " L " + numFmt(tipX) + " " + numFmt(tipY) + " L " + numFmt(lastR.x) + " " + numFmt(lastR.y);
-  } else if (compiled.behavior.isDot || compiled.behavior.isCrownDot) {
-    const endMidX = (lastL.x + lastR.x) * 0.5;
-    const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capMult = compiled.behavior.isCrownDot ? 0.16 : 0.20;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * capMult;
-    d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
   } else {
-    const endMidX = (lastL.x + lastR.x) * 0.5;
-    const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.24;
-    d += " Q " + numFmt(endMidX + endPt.tx * capSpan) + " " + numFmt(endMidY + endPt.ty * capSpan) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+    const cap = strokeExitCapControls(compiled, lastL, lastR, endPt);
+    if (cap.kind === "C") {
+      d += " C " + numFmt(cap.c1x) + " " + numFmt(cap.c1y) + " " + numFmt(cap.c2x) + " " + numFmt(cap.c2y) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+    } else {
+      d += " Q " + numFmt(cap.qx) + " " + numFmt(cap.qy) + " " + numFmt(lastR.x) + " " + numFmt(lastR.y);
+    }
   }
 
   for (let i = smoothR.length - 2; i >= 0; i--) {
@@ -1941,13 +2048,8 @@ function traceSmoothStrokeContourPath(compiled, limitIdx, isHookTruncated = fals
   const firstL = smoothL[0];
   const firstR = smoothR[0];
   const p0 = pts[0];
-  const entryRatio = (compiled.behavior.isDot || compiled.behavior.isCrownDot) ? 0.18 : 0.20;
-  const entrySpan = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y) * entryRatio;
-  const cp1x = firstR.x - p0.tx * (entrySpan * 0.4);
-  const cp1y = firstR.y - p0.ty * (entrySpan * 0.4);
-  const cp2x = firstL.x - p0.tx * (entrySpan * 0.4);
-  const cp2y = firstL.y - p0.ty * (entrySpan * 0.4);
-  d += " C " + numFmt(cp1x) + " " + numFmt(cp1y) + " " + numFmt(cp2x) + " " + numFmt(cp2y) + " " + numFmt(firstL.x) + " " + numFmt(firstL.y) + " Z";
+  const entryCap = strokeEntryCapControls(compiled, firstL, firstR, p0);
+  d += " C " + numFmt(entryCap.c1x) + " " + numFmt(entryCap.c1y) + " " + numFmt(entryCap.c2x) + " " + numFmt(entryCap.c2y) + " " + numFmt(firstL.x) + " " + numFmt(firstL.y) + " Z";
 
   return d;
 }
@@ -2044,28 +2146,86 @@ function drawFleshyHookWedgePath(compiled, limitIdx, heelIdx) {
 }
 
 /**
+ * Dry-brush (kasure / feibai) slit channels for a compiled stroke.
+ * Default: two fixed channels on long free sweeps (撇 / 掃筆) only.
+ * dryKasure: channels placed where the simulated tuft wetness (Xu et al. 2004 Eq. 17) has run low, on any long stroke;
+ * strongly dry tails keep their slits open to the contour so the tip forks (Chu & Tai 2002 Sec. 3; 2004 "Dry brush").
+ */
+function getKasureChannels(compiled) {
+  const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
+  if (kScale <= 0) return [];
+  const b = compiled.behavior;
+  const pts = compiled.samples;
+
+  if (!STROKE_VARIANTS.dryKasure) {
+    const origLen = compiled.origLen || 0;
+    const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
+    if (!b.isSweepEnd || b.isZiHengPie || b.isRoofHook || b.isRisingTi || b.isVerticalTi || origLen <= 45 || b.isRightNa || compiled.hookFeature || cornersCount > 1) {
+      return [];
+    }
+    return [
+      { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
+      { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
+    ];
+  }
+
+  if (b.isDot || b.isCrownDot || b.isRisingTi || compiled.hookFeature || !pts || pts.length < 12) return [];
+  if (!compiled._dryness || compiled._dryness.length !== pts.length) {
+    const sstep = (a, bb, x) => { const t = Math.max(0, Math.min(1, (x - a) / (bb - a))); return t * t * (3 - 2 * t); };
+    compiled._dryness = pts.map(p => {
+      const wet = p.tuftWetness ?? 0.9;
+      return Math.max(0, Math.min(1, (0.88 - wet) / 0.14)) * sstep(0.5, 0.95, p.u ?? 0);
+    });
+  }
+  const dry = compiled._dryness;
+  let maxDry = 0;
+  let startIdx = -1;
+  for (let i = 0; i < dry.length; i++) {
+    if (dry[i] > maxDry) maxDry = dry[i];
+    if (startIdx < 0 && dry[i] > 0.08) startIdx = i;
+  }
+  if (maxDry < 0.12 || startIdx < 0) return [];
+
+  const seed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233) * 43758.5453) % 1.0;
+  const jit = (k) => ((seed * (k + 3.7)) % 1.0) - 0.5;
+  const lats = maxDry > 0.7 ? [0.28 + 0.08 * jit(1), 0.50 + 0.08 * jit(2), 0.72 + 0.08 * jit(3)] : [0.36 + 0.10 * jit(1), 0.64 + 0.10 * jit(2)];
+  const startU = pts[startIdx].u;
+  const endU = maxDry > 0.45 ? 1.0 : 0.95;
+  return lats.map((lat, j) => ({ lat, startU: Math.min(0.9, startU + 0.025 * j), endU, widthFrac: 0.11 * kScale, dry: true }));
+}
+
+/** Slit half-extent source: line width (px) and carve alpha at parameter t along a kasure channel. */
+function kasureSlitMetrics(compiled, ch, i, t, localWidth) {
+  if (ch.dry) {
+    const dryHere = (compiled._dryness && compiled._dryness[i]) || 0;
+    const grow = Math.max(0, Math.min(1, t / 0.35));
+    const env = grow * grow * (3 - 2 * grow);
+    const ramp = Math.max(0, Math.min(1, t / 0.30));
+    return {
+      width: localWidth * ch.widthFrac * env * (0.35 + 0.65 * dryHere),
+      alpha: 0.75 * ramp * (0.4 + 0.6 * dryHere)
+    };
+  }
+  const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
+  return {
+    width: localWidth * ch.widthFrac * env,
+    alpha: 0.55 * Math.pow(Math.sin(Math.min(1.0, t / 0.30) * (Math.PI * 0.5)), 1.8)
+  };
+}
+
+/**
  * 長撇・掃筆の渇筆（かすれ）スリットパス生成（反時計回り閉曲線によりnonzeroで中抜き）
  */
 function generateKasureSlitsPath(compiled, limitIdx) {
   const pts = compiled.samples;
-  const origLen = compiled.origLen || 0;
-  const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
-  if (!compiled.behavior.isSweepEnd || compiled.behavior.isZiHengPie || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || origLen <= 45 || compiled.behavior.isRightNa || compiled.hookFeature || cornersCount > 1) {
-    return "";
-  }
-
-  const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
-  if (kScale <= 0) return "";
-  const kasureChannels = [
-    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
-    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
-  ];
+  const kasureChannels = getKasureChannels(compiled);
+  if (kasureChannels.length === 0) return "";
 
   let slitPathD = "";
 
   for (const ch of kasureChannels) {
     const startIdx = Math.floor(pts.length * ch.startU);
-    const endIdx = Math.min(limitIdx, Math.floor(pts.length * ch.endU));
+    const endIdx = Math.min(limitIdx, pts.length - 1, Math.floor(pts.length * ch.endU));
     if (limitIdx <= startIdx || endIdx - startIdx < 2) continue;
 
     const rPts = [];
@@ -2076,8 +2236,7 @@ function generateKasureSlitsPath(compiled, limitIdx) {
       const uMid = p1.u;
       const t = Math.max(0, Math.min(1.0, (uMid - ch.startU) / (ch.endU - ch.startU)));
       const localWidth = Math.hypot(p1.rx - p1.lx, p1.ry - p1.ly);
-      const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
-      const halfW = Math.max(0.12, localWidth * ch.widthFrac * env * 0.5);
+      const halfW = Math.max(0.12, kasureSlitMetrics(compiled, ch, i, t, localWidth).width * 0.5);
 
       const bx = p1.lx + (p1.rx - p1.lx) * Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
       const by = p1.ly + (p1.ry - p1.ly) * Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
@@ -2540,27 +2699,13 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
     const tipY = (lastL.y + lastR.y) * 0.5 + endPt.ty * tipExt;
     ctx.lineTo(tipX, tipY);
     ctx.lineTo(lastR.x, lastR.y);
-  } else if (compiled.behavior.isDot || compiled.behavior.isCrownDot) {
-    const endMidX = (lastL.x + lastR.x) * 0.5;
-    const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capMult = compiled.behavior.isCrownDot ? 0.16 : 0.20;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * capMult;
-    ctx.quadraticCurveTo(
-      endMidX + endPt.tx * capSpan,
-      endMidY + endPt.ty * capSpan,
-      lastR.x,
-      lastR.y
-    );
   } else {
-    const endMidX = (lastL.x + lastR.x) * 0.5;
-    const endMidY = (lastL.y + lastR.y) * 0.5;
-    const capSpan = Math.hypot(lastL.x - lastR.x, lastL.y - lastR.y) * 0.24;
-    ctx.quadraticCurveTo(
-      endMidX + endPt.tx * capSpan,
-      endMidY + endPt.ty * capSpan,
-      lastR.x,
-      lastR.y
-    );
+    const cap = strokeExitCapControls(compiled, lastL, lastR, endPt);
+    if (cap.kind === "C") {
+      ctx.bezierCurveTo(cap.c1x, cap.c1y, cap.c2x, cap.c2y, lastR.x, lastR.y);
+    } else {
+      ctx.quadraticCurveTo(cap.qx, cap.qy, lastR.x, lastR.y);
+    }
   }
 
   for (let i = smoothR.length - 2; i >= 0; i--) {
@@ -2570,16 +2715,8 @@ function traceSmoothStrokeContour(ctx, compiled, limitIdx, isHookTruncated = fal
   const firstL = smoothL[0];
   const firstR = smoothR[0];
   const p0 = pts[0];
-  const entryRatio = (compiled.behavior.isDot || compiled.behavior.isCrownDot) ? 0.18 : 0.20;
-  const entrySpan = Math.hypot(firstL.x - firstR.x, firstL.y - firstR.y) * entryRatio;
-  ctx.bezierCurveTo(
-    firstR.x - p0.tx * (entrySpan * 0.4),
-    firstR.y - p0.ty * (entrySpan * 0.4),
-    firstL.x - p0.tx * (entrySpan * 0.4),
-    firstL.y - p0.ty * (entrySpan * 0.4),
-    firstL.x,
-    firstL.y
-  );
+  const entryCap = strokeEntryCapControls(compiled, firstL, firstR, p0);
+  ctx.bezierCurveTo(entryCap.c1x, entryCap.c1y, entryCap.c2x, entryCap.c2y, firstL.x, firstL.y);
   ctx.closePath();
 }
 
@@ -2739,16 +2876,8 @@ function drawFleshyHookWedge(ctx, compiled, limitIdx, heelIdx) {
 
 function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
   const pts = compiled.samples;
-  const origLen = compiled.origLen || 0;
-  const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
-  if (!compiled.behavior.isSweepEnd || compiled.behavior.isZiHengPie || compiled.behavior.isRoofHook || compiled.behavior.isRisingTi || compiled.behavior.isVerticalTi || origLen <= 45 || compiled.behavior.isRightNa || compiled.hookFeature || cornersCount > 1) return;
-
-  const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
-  if (kScale <= 0) return;
-  const kasureChannels = [
-    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
-    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
-  ];
+  const kasureChannels = getKasureChannels(compiled);
+  if (kasureChannels.length === 0) return;
 
   ctx.save();
   ctx.globalCompositeOperation = "destination-out";
@@ -2757,7 +2886,7 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
 
   for (const ch of kasureChannels) {
     const startIdx = Math.floor(pts.length * ch.startU);
-    const endIdx = Math.min(limitIdx, Math.floor(pts.length * ch.endU));
+    const endIdx = Math.min(limitIdx, pts.length - 1, Math.floor(pts.length * ch.endU));
     if (limitIdx <= startIdx) continue;
 
     for (let i = startIdx; i < endIdx; i++) {
@@ -2767,10 +2896,10 @@ function renderKasureAndFrayedBristles(ctx, compiled, limitIdx) {
       const t = Math.max(0, Math.min(1.0, (uMid - ch.startU) / (ch.endU - ch.startU)));
 
       const localWidth = Math.hypot(p1.rx - p1.lx, p1.ry - p1.ly);
-      const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
-      ctx.lineWidth = Math.max(0.25, localWidth * ch.widthFrac * env);
+      const slit = kasureSlitMetrics(compiled, ch, i, t, localWidth);
+      ctx.lineWidth = Math.max(0.25, slit.width);
 
-      const alpha = 0.55 * Math.pow(Math.sin(Math.min(1.0, t / 0.30) * (Math.PI * 0.5)), 1.8);
+      const alpha = slit.alpha;
       ctx.strokeStyle = "rgba(0, 0, 0, " + alpha.toFixed(3) + ")";
 
       const lat1 = Math.max(0.28, Math.min(0.74, ch.lat - 0.04 * (p1.cefengBias || 0.0)));
@@ -3454,7 +3583,8 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
 
       // Zhongfeng (中鋒) vs. Cefeng (側鋒) Tip-Edge vs. Belly-Edge Tonal & Meniscus Asymmetry
       // (Xie et al. 2013 Sec. 4.1 upright vs. oblique style; Chu & Tai 2002 Sec. 2; Xu et al. 2004 Eq. 5)
-      const cefengModulation = 0.052 * cefengInt * cefengBiasHere * Math.sin(vClamped * (Math.PI * 0.5)) * wCore;
+      const cefengToneGain = STROKE_VARIANTS.strongCefeng ? 2.6 : 1.0;
+      const cefengModulation = 0.052 * cefengToneGain * cefengInt * cefengBiasHere * Math.sin(vClamped * (Math.PI * 0.5)) * wCore;
 
       // Zero-B5 cellulose fiber granulation (active everywhere, including spine core)
       const gLin = valleySign * grainAmp * gZero;
@@ -3547,6 +3677,15 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
         }
       }
 
+      // wetDryTrim (Chu & Tai 2005 Sec. 6.1, Eq. 11): trim the footprint where phi = [low-passed wet mask] - 0.5 + r_scale * rough < 0,
+      // so the silhouette follows paper-fibre roughness instead of the ideal contour
+      if (STROKE_VARIANTS.wetDryTrim && mask > 0.01 && mb < 0.97) {
+        const rough = 0.6 * fil + 0.4 * mFib;
+        const phiTrim = (mb - 0.5) + 0.26 * rough;
+        const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.15) / 0.30));
+        finalAlpha *= tTrim * tTrim * (3.0 - 2.0 * tTrim);
+      }
+
       if (finalAlpha < 0.004) {
         data[idx * 4 + 3] = 0;
         continue;
@@ -3609,7 +3748,7 @@ function renderPartialCompiledStroke(targetCtx, compiled, endIdx, options = {}) 
   }
 
   const p = SLENDER_PHYSICS || DEFAULT_SLENDER_PHYSICS;
-  const cacheKey = `${limit}_${toneMode}_${W}_${H}_${p.kasureAmount}_${p.paperGrainIntensity}_${p.coffeeRingIntensity}_${p.nijimiIntensity}_${p.bristleStriationIntensity}_${p.dwellPoolingIntensity}_${p.kmTransmittanceContrast}_${p.glueChromaticWarmth}_${p.coreMantleContrast}_${p.cefengObliqueIntensity}_${p.tuftPlasticityElasticity}_${p.reservoirCompressionSqueeze}`;
+  const cacheKey = `${limit}_${toneMode}_${W}_${H}_${p.kasureAmount}_${p.paperGrainIntensity}_${p.coffeeRingIntensity}_${p.nijimiIntensity}_${p.bristleStriationIntensity}_${p.dwellPoolingIntensity}_${p.kmTransmittanceContrast}_${p.glueChromaticWarmth}_${p.coreMantleContrast}_${p.cefengObliqueIntensity}_${p.tuftPlasticityElasticity}_${p.reservoirCompressionSqueeze}_${getStrokeVariantKey()}`;
 
   if (compiled._kmRenderCache && compiled._kmRenderCache.key === cacheKey && compiled._kmRenderCache.canvas) {
     targetCtx.save();

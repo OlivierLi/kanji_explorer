@@ -105,3 +105,13 @@ curl -s "http://localhost:8888/api/char?q=%E8%9B%8D" | python3 -m json.tool | he
 # 3. Test reverse component lookup (ordered from most to least common)
 curl -s "http://localhost:8888/api/ids-find?components=%F0%AD%95%84" | python3 -m json.tool | head -n 40
 ```
+
+### Stroke-Shape Variant Approval
+Experimental brush-shape changes live behind opt-in flags in `STROKE_VARIANTS` (`static/app.js`, all `false` by default so the shipped look is unchanged).
+```bash
+# Rebuild the self-contained review page (inlines static/app.js + KanjiVG strokes), then open stroke_approval.html in a browser
+python3 scripts/build_stroke_approval.py
+# After approving variants in the page, export decisions.json and switch the approved flags on by default
+python3 scripts/apply_stroke_approvals.py decisions.json
+```
+Rebuild `stroke_approval.html` after any change to `static/app.js`; it is a generated artifact.

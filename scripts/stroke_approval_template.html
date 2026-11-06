@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stroke-shape approval</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2026; --panel2: #252932; --line: #333845; --text: #e6e8ec; --muted: #9aa3b2;
+    --ok: #3fb97a; --no: #e0605e; --tweak: #e0a93f; --accent: #6aa7ff; --paper: #f4efe3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 20; background: rgba(20,22,26,.96); border-bottom: 1px solid var(--line); padding: 10px 20px; }
+  header h1 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 18px; line-height: 1.4; }
+  .chip.active { border-color: var(--accent); background: #22344d; }
+  .small { font-size: 12px; color: var(--muted); }
+  button, select, input[type=text], textarea { font: inherit; }
+  button.btn { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.primary { background: #264a7a; border-color: #3a6db3; }
+  main { max-width: 1280px; margin: 0 auto; padding: 18px 20px 120px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 22px; overflow: hidden; }
+  .card.ok { border-color: var(--ok); } .card.no { border-color: var(--no); } .card.tweak { border-color: var(--tweak); }
+  .card-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .card-head h2 { margin: 0; font-size: 16px; }
+  .card-head .jp { color: var(--muted); font-size: 12px; }
+  .status { font-size: 12px; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .status.ok { color: var(--ok); border-color: var(--ok); } .status.no { color: var(--no); border-color: var(--no); } .status.tweak { color: var(--tweak); border-color: var(--tweak); }
+  .card-body { display: grid; grid-template-columns: 360px 1fr; gap: 0; }
+  @media (max-width: 1000px) { .card-body { grid-template-columns: 1fr; } }
+  .info { padding: 14px 16px; border-right: 1px solid var(--line); font-size: 13px; }
+  .info h4 { margin: 12px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .info p { margin: 0; }
+  .views { padding: 14px 16px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pair.three { grid-template-columns: 1fr 1fr 1fr; }
+  .view { position: relative; background: var(--paper); border-radius: 6px; overflow: hidden; border: 1px solid var(--line); cursor: zoom-in; }
+  .view canvas { display: block; width: 100%; height: auto; }
+  .view .tag { position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 1px 8px; border-radius: 99px; pointer-events: none; }
+  .view .busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(244,239,227,.85); color: #555; font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel2); }
+  .controls label.radio { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; }
+  .controls label.radio.ok.sel { background: rgba(63,185,122,.18); border-color: var(--ok); }
+  .controls label.radio.no.sel { background: rgba(224,96,94,.18); border-color: var(--no); }
+  .controls label.radio.tweak.sel { background: rgba(224,169,63,.18); border-color: var(--tweak); }
+  .controls input[type=radio] { accent-color: var(--accent); }
+  textarea { flex: 1 1 260px; min-height: 34px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; resize: vertical; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(20,22,26,.97); border-top: 1px solid var(--line); padding: 10px 20px; z-index: 30; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 100; display: none; flex-direction: column; }
+  #modal.open { display: flex; }
+  #modalBar { padding: 8px 16px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--line); }
+  #modalScroll { flex: 1; overflow: auto; padding: 16px; }
+  #cmp { position: relative; display: inline-block; background: var(--paper); user-select: none; }
+  #cmp canvas { display: block; }
+  #cmp .top { position: absolute; left: 0; top: 0; }
+  #cmpLine { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff5da2; pointer-events: none; }
+  h3.sec { margin: 26px 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stat { font-size: 12px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Stroke-shape approval <span class="small">&mdash; baseline vs. each opt-in variant; nothing here is active until you approve it</span></h1>
+  <div class="row">
+    <span class="small">Character:</span>
+    <span id="chars" class="row"></span>
+    <span style="flex:1"></span>
+    <label class="small"><input type="checkbox" id="showDiff"> show diff map</label>
+    <button class="btn" id="rerender">Re-render</button>
+  </div>
+</header>
+
+<main>
+  <div class="note">
+    <b>How to review.</b> Each card renders the baseline (all variants off) next to the variant for the selected character.
+    Click any image to open a swipe-compare with zoom. Choose <b>Approve</b>, <b>Reject</b> or <b>Tweak</b> (with a comment saying what to change),
+    then use <b>Export decisions</b> at the bottom. <code>python3 scripts/apply_stroke_approvals.py decisions.json</code> switches approved variants on by default.<br>
+    <b>Ink opacity and darkness are unchanged</b> &mdash; per your note the current transparency stays; the exact-Kubelka-Munk &ldquo;darker sumi&rdquo; option is not offered here.
+  </div>
+
+  <div id="cards"></div>
+
+  <h3 class="sec">Combined preview</h3>
+  <div class="card" id="combined">
+    <div class="card-head">
+      <div><h2>Baseline vs. all <span id="combLabel">approved</span> variants together</h2>
+        <div class="small">Interactions between variants (e.g. mitred corners + elliptical caps) are only visible here.</div></div>
+      <div class="row">
+        <label class="small"><input type="radio" name="combMode" value="approved" checked> approved only</label>
+        <label class="small"><input type="radio" name="combMode" value="all"> every variant</label>
+        <button class="btn" id="renderCombined">Render combined</button>
+      </div>
+    </div>
+    <div class="views"><div class="pair" id="combPair"></div></div>
+  </div>
+</main>
+
+<footer>
+  <div class="row">
+    <span id="summary" class="small"></span>
+    <span style="flex:1"></span>
+    <button class="btn" id="resetAll">Reset decisions</button>
+    <button class="btn" id="copyJson">Copy JSON</button>
+    <button class="btn primary" id="downloadJson">Export decisions</button>
+  </div>
+</footer>
+
+<div id="modal">
+  <div id="modalBar">
+    <b id="modalTitle"></b>
+    <span class="small">drag the pink line or move the slider &middot; left = baseline, right = variant</span>
+    <span style="flex:1"></span>
+    <label class="small">zoom <select id="zoom"><option value="0.5">50%</option><option value="1" selected>100%</option><option value="2">200%</option><option value="3">300%</option></select></label>
+    <label class="small">split <input type="range" id="split" min="0" max="100" value="50"></label>
+    <button class="btn" id="closeModal">Close (Esc)</button>
+  </div>
+  <div id="modalScroll"><div id="cmp"><canvas id="cmpA"></canvas><canvas id="cmpB" class="top"></canvas><div id="cmpLine"></div></div></div>
+</div>
+
+<script>/*__APP_JS__*/</script>
+<script>
+(function () {
+  "use strict";
+  const DATA = /*__DATA__*/null;
+  const STORE = "strokeApproval.v1";
+  const PAPER = "#f4efe3";
+  const VARIANT_IDS = DATA.variants.map(v => v.id);
+
+  const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) { return {}; } })();
+  const state = {
+    char: saved.char && DATA.strokes[saved.char] ? saved.char : DATA.chars[0],
+    decisions: saved.decisions || {}
+  };
+  function persist() { localStorage.setItem(STORE, JSON.stringify(state)); }
+
+  /* ---------- rendering ---------- */
+  const cache = new Map();   // key -> canvas (792x792)
+  function flagKey(flags) { return VARIANT_IDS.map(id => flags[id] ? "1" : "0").join(""); }
+
+  function renderChar(ch, flags) {
+    const key = ch + "|" + flagKey(flags);
+    if (cache.has(key)) return cache.get(key);
+    const canvas = document.createElement("canvas");
+    canvas.width = 792; canvas.height = 792;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.fillStyle = PAPER; ctx.fillRect(0, 0, 792, 792);
+    const prev = {};
+    for (const k of Object.keys(STROKE_VARIANTS)) { prev[k] = STROKE_VARIANTS[k]; STROKE_VARIANTS[k] = !!flags[k]; }
+    try {
+      const strokes = DATA.strokes[ch];
+      strokes.forEach((s, i) => {
+        const compiled = compileStrokePhysics({ d: s.d, type: s.type || "", component: s.component || "", index: i + 1 }, 0, 0, 792, strokes.length);
+        if (compiled) renderFullCompiledStroke(ctx, compiled, { toneMode: "sumi", opacity: 1.0 });
+      });
+    } finally {
+      for (const k of Object.keys(prev)) STROKE_VARIANTS[k] = prev[k];
+    }
+    cache.set(key, canvas);
+    return canvas;
+  }
+
+  function diffCanvas(a, b) {
+    const out = document.createElement("canvas");
+    out.width = 792; out.height = 792;
+    const octx = out.getContext("2d");
+    const da = a.getContext("2d").getImageData(0, 0, 792, 792).data;
+    const db = b.getContext("2d").getImageData(0, 0, 792, 792).data;
+    const img = octx.createImageData(792, 792);
+    let changed = 0, ink = 0;
+    for (let i = 0; i < da.length; i += 4) {
+      const d = Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2]));
+      const lum = 0.3 * da[i] + 0.59 * da[i + 1] + 0.11 * da[i + 2];
+      if (lum < 200) ink++;
+      const base = 255 - Math.round((255 - lum) * 0.25);
+      if (d > 12) {
+        changed++;
+        const t = Math.min(1, d / 120);
+        img.data[i] = 255; img.data[i + 1] = Math.round(base * (1 - 0.85 * t)); img.data[i + 2] = Math.round(base * (1 - 0.6 * t)); img.data[i + 3] = 255;
+      } else {
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = base; img.data[i + 3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    out._stat = { changed, ink };
+    return out;
+  }
+
+  /* ---------- UI construction ---------- */
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") n.className = v; else if (k === "html") n.innerHTML = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+    }
+    for (const kid of kids) if (kid != null) n.append(kid);
+    return n;
+  };
+
+  function makeView(label) {
+    const wrap = el("div", { class: "view" });
+    const holder = el("div");
+    wrap.append(holder, el("div", { class: "tag" }, label));
+    wrap._holder = holder;
+    wrap._busy = el("div", { class: "busy" }, "rendering\u2026");
+    wrap.append(wrap._busy);
+    return wrap;
+  }
+  function setCanvas(view, canvas) {
+    view._holder.replaceChildren(canvas.cloneNode(false));
+    const dst = view._holder.firstChild;
+    dst.width = canvas.width; dst.height = canvas.height;
+    dst.getContext("2d").drawImage(canvas, 0, 0);
+    view._busy.style.display = "none";
+  }
+
+  const cardRefs = {};
+  function buildCards() {
+    const host = document.getElementById("cards");
+    host.replaceChildren();
+    for (const v of DATA.variants) {
+      const base = makeView("baseline");
+      const alt = makeView("variant");
+      const diff = makeView("changed pixels");
+      diff.style.display = "none";
+      const pair = el("div", { class: "pair" }, base, alt, diff);
+      const stat = el("div", { class: "stat" });
+      const status = el("span", { class: "status" }, "undecided");
+
+      const decisionEls = {};
+      const controls = el("div", { class: "controls" });
+      for (const [val, label, cls] of [["ok", "Approve", "ok"], ["tweak", "Tweak\u2026", "tweak"], ["no", "Reject", "no"]]) {
+        const input = el("input", { type: "radio", name: "dec-" + v.id, value: val });
+        const lab = el("label", { class: "radio " + cls }, input, label);
+        input.addEventListener("change", () => setDecision(v.id, val, null));
+        decisionEls[val] = { input, lab };
+        controls.append(lab);
+      }
+      const comment = el("textarea", { placeholder: "Comment / what to tweak (optional)\u2026", rows: "1" });
+      comment.addEventListener("input", () => setDecision(v.id, null, comment.value));
+      controls.append(comment);
+
+      const info = el("div", { class: "info" },
+        el("p", {}, v.summary),
+        el("h4", {}, "Why (source)"), el("p", {}, v.why),
+        el("h4", {}, "Affects"), el("p", {}, v.affects),
+        el("h4", {}, "Trade-off"), el("p", {}, v.risk),
+        el("h4", {}, "Look at"), el("p", {}, v.look_for));
+      const views = el("div", { class: "views" }, pair, stat);
+      const card = el("div", { class: "card", id: "card-" + v.id },
+        el("div", { class: "card-head" },
+          el("div", {}, el("h2", {}, v.title), el("div", { class: "jp" }, v.jp + "  \u00b7  flag: " + v.id)), status),
+        el("div", { class: "card-body" }, info, views), controls);
+      host.append(card);
+
+      for (const view of [base, alt, diff]) {
+        view.addEventListener("click", () => openCompare(v));
+      }
+      cardRefs[v.id] = { card, base, alt, diff, stat, status, decisionEls, comment };
+    }
+    refreshDecisionUI();
+  }
+
+  function setDecision(id, decision, comment) {
+    const d = state.decisions[id] || { decision: null, comment: "" };
+    if (decision !== null) d.decision = decision;
+    if (comment !== null) d.comment = comment;
+    d.updated = new Date().toISOString();
+    state.decisions[id] = d;
+    persist();
+    refreshDecisionUI();
+  }
+
+  function refreshDecisionUI() {
+    let ok = 0, no = 0, tweak = 0;
+    for (const v of DATA.variants) {
+      const ref = cardRefs[v.id];
+      const d = state.decisions[v.id] || {};
+      for (const [val, o] of Object.entries(ref.decisionEls)) {
+        o.input.checked = d.decision === val;
+        o.lab.classList.toggle("sel", d.decision === val);
+      }
+      if (document.activeElement !== ref.comment) ref.comment.value = d.comment || "";
+      ref.card.classList.remove("ok", "no", "tweak");
+      ref.status.className = "status";
+      ref.status.textContent = "undecided";
+      if (d.decision) {
+        ref.card.classList.add(d.decision); ref.status.classList.add(d.decision);
+        ref.status.textContent = { ok: "approved", no: "rejected", tweak: "needs tweak" }[d.decision];
+      }
+      if (d.decision === "ok") ok++; else if (d.decision === "no") no++; else if (d.decision === "tweak") tweak++;
+    }
+    const undecided = DATA.variants.length - ok - no - tweak;
+    document.getElementById("summary").textContent = `${ok} approved \u00b7 ${tweak} to tweak \u00b7 ${no} rejected \u00b7 ${undecided} undecided`;
+  }
+
+  /* ---------- rendering queue ---------- */
+  let renderToken = 0;
+  function renderAll() {
+    const token = ++renderToken;
+    const ch = state.char;
+    const showDiff = document.getElementById("showDiff").checked;
+    const jobs = [];
+    const baseFlags = {};
+    jobs.push(() => {
+      const c = renderChar(ch, baseFlags);
+      for (const v of DATA.variants) setCanvas(cardRefs[v.id].base, c);
+    });
+    for (const v of DATA.variants) {
+      jobs.push(() => {
+        const flags = { [v.id]: true };
+        const c = renderChar(ch, flags);
+        const ref = cardRefs[v.id];
+        setCanvas(ref.alt, c);
+        const base = renderChar(ch, baseFlags);
+        const dc = diffCanvas(base, c);
+        ref.diff.style.display = showDiff ? "" : "none";
+        setCanvas(ref.diff, dc);
+        const pct = dc._stat.ink ? (100 * dc._stat.changed / dc._stat.ink) : 0;
+        ref.stat.textContent = `${dc._stat.changed.toLocaleString()} pixels differ (${pct.toFixed(1)}% of the ink area) for ${ch}`;
+      });
+    }
+    for (const v of DATA.variants) {
+      for (const k of ["base", "alt", "diff"]) cardRefs[v.id][k]._busy.style.display = "flex";
+    }
+    (function step(i) {
+      if (token !== renderToken || i >= jobs.length) return;
+      setTimeout(() => { if (token !== renderToken) return; jobs[i](); step(i + 1); }, 20);
+    })(0);
+  }
+
+  /* ---------- combined ---------- */
+  function renderCombined() {
+    const mode = document.querySelector("input[name=combMode]:checked").value;
+    const flags = {};
+    for (const v of DATA.variants) flags[v.id] = mode === "all" ? true : ((state.decisions[v.id] || {}).decision === "ok");
+    const pair = document.getElementById("combPair");
+    pair.replaceChildren();
+    const base = makeView("baseline"); const comb = makeView(mode === "all" ? "all variants" : "approved variants");
+    pair.append(base, comb);
+    for (const view of [base, comb]) view.addEventListener("click", () => openCompareFlags("Combined", {}, flags));
+    document.getElementById("combLabel").textContent = mode === "all" ? "enabled" : "approved";
+    setTimeout(() => { setCanvas(base, renderChar(state.char, {})); setTimeout(() => setCanvas(comb, renderChar(state.char, flags)), 20); }, 20);
+  }
+
+  /* ---------- compare modal ---------- */
+  const modal = document.getElementById("modal");
+  const cmpA = document.getElementById("cmpA"), cmpB = document.getElementById("cmpB"), cmpLine = document.getElementById("cmpLine");
+  const split = document.getElementById("split"), zoom = document.getElementById("zoom");
+  function applyCompareLayout() {
+    const z = parseFloat(zoom.value);
+    const size = Math.round(792 * z);
+    for (const c of [cmpA, cmpB]) { c.style.width = size + "px"; c.style.height = size + "px"; }
+    const frac = split.value / 100;
+    cmpB.style.clipPath = `inset(0 0 0 ${frac * 100}%)`;
+    cmpLine.style.left = (frac * size) + "px";
+  }
+  function showCompare(title, flagsA, flagsB) {
+    document.getElementById("modalTitle").textContent = title + " \u2014 " + state.char;
+    for (const [dst, flags] of [[cmpA, flagsA], [cmpB, flagsB]]) {
+      const c = renderChar(state.char, flags);
+      dst.width = 792; dst.height = 792;
+      dst.getContext("2d").drawImage(c, 0, 0);
+    }
+    applyCompareLayout();
+    modal.classList.add("open");
+  }
+  function openCompare(v) { showCompare(v.title, {}, { [v.id]: true }); }
+  function openCompareFlags(title, a, b) { showCompare(title, a, b); }
+  split.addEventListener("input", applyCompareLayout);
+  zoom.addEventListener("change", applyCompareLayout);
+  document.getElementById("cmp").addEventListener("mousemove", (e) => {
+    if (e.buttons !== 1) return;
+    const r = document.getElementById("cmp").getBoundingClientRect();
+    split.value = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100));
+    applyCompareLayout();
+  });
+  document.getElementById("cmp").addEventListener("mousedown", (e) => {
+    const r = document.getElementById("cmp").getBoundingClientRect();
+    split.value = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100));
+    applyCompareLayout();
+  });
+  function closeModal() { modal.classList.remove("open"); }
+  document.getElementById("closeModal").addEventListener("click", closeModal);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+  /* ---------- export ---------- */
+  function exportPayload() {
+    const out = {
+      generated: new Date().toISOString(),
+      note: "Variant decisions for static/app.js STROKE_VARIANTS. decision: ok | tweak | no",
+      decisions: {}
+    };
+    for (const v of DATA.variants) {
+      const d = state.decisions[v.id];
+      out.decisions[v.id] = { decision: d && d.decision ? d.decision : "undecided", comment: d ? (d.comment || "") : "" };
+    }
+    return out;
+  }
+  document.getElementById("downloadJson").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: "application/json" });
+    const a = el("a", { href: URL.createObjectURL(blob), download: "decisions.json" });
+    document.body.append(a); a.click(); a.remove();
+  });
+  document.getElementById("copyJson").addEventListener("click", async () => {
+    const text = JSON.stringify(exportPayload(), null, 2);
+    try { await navigator.clipboard.writeText(text); } catch (e) { window.prompt("Copy the JSON:", text); }
+  });
+  document.getElementById("resetAll").addEventListener("click", () => {
+    if (!confirm("Clear every decision and comment?")) return;
+    state.decisions = {}; persist(); refreshDecisionUI();
+  });
+
+  /* ---------- header ---------- */
+  const charsHost = document.getElementById("chars");
+  for (const ch of DATA.chars) {
+    if (!DATA.strokes[ch]) continue;
+    const b = el("button", { class: "chip" + (ch === state.char ? " active" : ""), type: "button" }, ch);
+    b.addEventListener("click", () => {
+      state.char = ch; persist();
+      for (const c of charsHost.children) c.classList.toggle("active", c.textContent === ch);
+      renderAll();
+    });
+    charsHost.append(b);
+  }
+  document.getElementById("showDiff").addEventListener("change", () => {
+    const on = document.getElementById("showDiff").checked;
+    for (const v of DATA.variants) cardRefs[v.id].diff.style.display = on ? "" : "none";
+    for (const row of document.querySelectorAll(".card .pair")) row.classList.toggle("three", on);
+  });
+  document.getElementById("rerender").addEventListener("click", () => { cache.clear(); renderAll(); });
+  document.getElementById("renderCombined").addEventListener("click", renderCombined);
+
+  buildCards();
+  renderAll();
+})();
+</script>
+</body>
+</html>
