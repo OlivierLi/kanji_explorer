@@ -1,0 +1,77 @@
+{
+  "generated": "2026-11-09T00:24:24.710Z",
+  "note": "Variant decisions for static/app.js STROKE_VARIANTS. decision: ok | tweak | no. params = slider values (STROKE_VARIANT_TUNING) at export time.",
+  "decisions": {
+    "ellipticalCaps": {
+      "decision": "ok",
+      "comment": "",
+      "params": {
+        "exitDepth": 0.42,
+        "entryDepth": 0.32,
+        "ellipticityGain": 0.32
+      },
+      "changed_params": []
+    },
+    "mitreCorners": {
+      "decision": "no",
+      "comment": ""
+    },
+    "strongCefeng": {
+      "decision": "ok",
+      "comment": "",
+      "params": {
+        "shiftGain": 0.3,
+        "shiftCap": 0.4,
+        "toneGain": 2.6,
+        "entryFloor": 0.6
+      },
+      "changed_params": []
+    },
+    "dryKasure": {
+      "decision": "no",
+      "comment": "Looks weird now",
+      "params": {
+        "freeWidth": 0.14,
+        "stopWidth": 0.04,
+        "alpha": 0.44,
+        "streakDepth": 0.35,
+        "grain": 0.3,
+        "wetOnset": 0.88,
+        "minLen": 59
+      },
+      "changed_params": [
+        "stopWidth",
+        "alpha",
+        "wetOnset",
+        "grain",
+        "minLen"
+      ]
+    },
+    "anchoredEnds": {
+      "decision": "ok",
+      "comment": "",
+      "params": {
+        "naFootLen": 9,
+        "sweepLen": 24
+      },
+      "changed_params": []
+    },
+    "wetDryTrim": {
+      "decision": "no",
+      "comment": "This is now too intense.",
+      "params": {
+        "depthPx": 0.5,
+        "biteLo": 0.2,
+        "macroMix": 0.35,
+        "wetFloor": 0.1,
+        "fineRough": 0.8
+      },
+      "changed_params": [
+        "depthPx",
+        "wetFloor",
+        "fineRough",
+        "macroMix"
+      ]
+    }
+  }
+}
