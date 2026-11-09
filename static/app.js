@@ -676,22 +676,16 @@ const DEFAULT_SLENDER_PHYSICS = {
 const SLENDER_PHYSICS = { ...DEFAULT_SLENDER_PHYSICS };
 
 /**
- * Opt-in stroke-shape variants awaiting visual approval (see stroke_approval.html). All default to false so the
- * established look is unchanged; each flag can be toggled independently at runtime.
+ * Stroke-shape variants reviewed in stroke_approval.html (decisions recorded in approvals/). Approved variants default
+ * to true; each flag can still be toggled independently at runtime to compare against the previous look.
  *  - anchoredEnds:   stroke-end forms keep absolute lengths instead of stretching with stroke length (Hsu & Lee 1994 Sec. 4.1)
  *  - ellipticalCaps: start/end caps follow the tuft cross-section ellipticity (Chu & Tai 2002 Sec. 4.1.2; Xu et al. 2004 Eq. 18)
- *  - mitreCorners:   angle-scaled outer shoulder and a mitred outer join at sharp corners (Hsu & Lee 1994 Sec. 4.1, Fig. 5)
  *  - strongCefeng:   oblique (Cefeng) posture visibly shifts the tuft toward one stroke edge (Xie et al. 2013 Sec. 4.1)
- *  - dryKasure:      dry-brush splits driven by the simulated tuft wetness on every long stroke, opening tails (Chu & Tai 2004)
- *  - wetDryTrim:     MoXi-style wet/dry boundary trimming with paper-fibre roughening of the silhouette (Chu & Tai 2005 Sec. 6.1)
  */
 const STROKE_VARIANTS = {
   anchoredEnds: true,
   ellipticalCaps: true,
-  mitreCorners: false,
-  strongCefeng: true,
-  dryKasure: false,
-  wetDryTrim: false
+  strongCefeng: true
 };
 
 /*
@@ -717,38 +711,10 @@ const STRONG_CEFENG_TUNING = {
   entryFloor: 0.6       // share of the shift kept at an exposed-tip (lufeng) entry
 };
 
-const DRY_KASURE_TUNING = {
-  minLen: 40,           // KanjiVG units: shorter strokes never split
-  wetOnset: 0.86,       // tuft wetness below which the tip starts to split (higher = earlier, on more strokes)
-  wetSpan: 0.10,
-  uOnset: 0.40,
-  minDry: 0.20,
-  freeWidth: 0.14,      // split width as a fraction of the local stroke width, free (harai) endings
-  stopWidth: 0.07,      // stopped / framed endings
-  stopEndU: 0.90,
-  threeSlitDry: 0.65,
-  streakDepth: 0.35,    // how much each split pinches and swells along the stroke
-  alpha: 0.75,          // how completely a split removes ink (1 = bare paper)
-  grain: 0.5            // paper-peak speckle in the dry zone (Chu & Tai 2004 p. 81 peak catching)
-};
-
-const WET_DRY_TRIM_TUNING = {
-  depthPx: 3.5,         // maximum bite depth into the contour, canvas px at the 792 px box
-  fineRough: 0.36,      // fine fibre nibbling inside the low-passed rim (Chu & Tai 2005 Eq. 11 r_scale)
-  macroMix: 0.7,        // share of the macro-fibre field (vs. fine filaments) that shapes the bites
-  biteLo: 0.10,         // bite threshold on the fibre field (higher = fewer bites)
-  biteHi: 0.60,
-  wetFloor: 0.15,       // fraction of the bite depth present even where the tuft is still fully wet
-  wetOnset: 0.93,
-  wetSpan: 0.15
-};
-
 const STROKE_VARIANT_TUNING = {
   anchoredEnds: ANCHORED_ENDS_TUNING,
   ellipticalCaps: ELLIPTICAL_CAPS_TUNING,
-  strongCefeng: STRONG_CEFENG_TUNING,
-  dryKasure: DRY_KASURE_TUNING,
-  wetDryTrim: WET_DRY_TRIM_TUNING
+  strongCefeng: STRONG_CEFENG_TUNING
 };
 
 function getStrokeVariantKey() {
@@ -1386,7 +1352,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const bell = 0.5 * (1 + Math.cos(t * Math.PI));
           poolWeight = Math.max(poolWeight, 0.95 * bell);
           const isAcute = behavior.isPieZhe && cf.angle > 1.0;
-          const outerBoost = (isAcute ? 0.0 : (STROKE_VARIANTS.mitreCorners ? 0.06 + 0.26 * Math.sin(Math.min(cf.angle, Math.PI / 2)) : 0.16)) * tonMult;
+          const outerBoost = (isAcute ? 0.0 : 0.16) * tonMult;
           const innerPinch = isAcute ? 0.52 : 0.14;
           const innerFloor = isAcute ? 0.20 : 0.68;
 
@@ -1927,44 +1893,6 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
-  // mitreCorners: replace the round outer join of sharp corners by a mitre vertex (bevelled when it would spike)
-  if (STROKE_VARIANTS.mitreCorners && !hookFeature) {
-    for (const cf of cornerFeatures) {
-      if (cf.angle < 0.55) continue;
-      if (behavior.isPieZhe && cf.angle > 1.0) continue;
-      const K = 5;
-      const iA = Math.max(1, cf.index - K);
-      const iB = Math.min(numSamples - 1, cf.index + K);
-      if (iB - iA < 4) continue;
-      const outerIsRight = cf.turnSign >= 0;
-      const getO = (idx) => outerIsRight ? { x: rawPts[idx].rx, y: rawPts[idx].ry } : { x: rawPts[idx].lx, y: rawPts[idx].ly };
-      const setO = (idx, pt) => {
-        if (outerIsRight) { rawPts[idx].rx = pt.x; rawPts[idx].ry = pt.y; } else { rawPts[idx].lx = pt.x; rawPts[idx].ly = pt.y; }
-      };
-      const pA = getO(iA);
-      const pB = getO(iB);
-      // Offset-line directions are the spine tangents on each side of the corner (straight segments, not the smoothed turn)
-      const tA = { x: rawPts[iA].tx, y: rawPts[iA].ty };
-      const tB = { x: rawPts[iB].tx, y: rawPts[iB].ty };
-      const det = tA.x * tB.y - tA.y * tB.x;
-      if (Math.abs(det) < 0.15) continue;
-      const wx = pB.x - pA.x;
-      const wy = pB.y - pA.y;
-      const tA_s = (wx * tB.y - wy * tB.x) / det;
-      const M = { x: pA.x + tA.x * tA_s, y: pA.y + tA.y * tA_s };
-      const rOuter = outerIsRight ? clampedRR[cf.index] : clampedRL[cf.index];
-      const miterLen = Math.hypot(M.x - rawPts[cf.index].x, M.y - rawPts[cf.index].y);
-      // Bevel instead of mitre when the spike would exceed 2.6 stroke half-widths or points backwards
-      if (!(tA_s > 0) || miterLen > 2.6 * Math.max(rOuter, 1e-3)) continue;
-      for (let j = iA + 1; j < iB; j++) {
-        const f = j <= cf.index ? (j - iA) / Math.max(1, cf.index - iA) : (j - cf.index) / Math.max(1, iB - cf.index);
-        const from = j <= cf.index ? pA : M;
-        const to = j <= cf.index ? M : pB;
-        setO(j, { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f });
-      }
-    }
-  }
-
   // Expanded corner features for geometry and evaluation
   const evalCornerFeatures = [...cornerFeatures];
   // Also detect short-stroke flick corner like 心 s3 (origLen < 25)
@@ -2213,98 +2141,25 @@ function drawFleshyHookWedgePath(compiled, limitIdx, heelIdx) {
 
 /**
  * Dry-brush (kasure / feibai) slit channels for a compiled stroke.
- * Default: two fixed channels on long free sweeps (撇 / 掃筆) only.
- * dryKasure: channels placed where the simulated tuft wetness (Xu et al. 2004 Eq. 17) has run low, on any long stroke;
- * strongly dry tails keep their slits open to the contour so the tip forks (Chu & Tai 2002 Sec. 3; 2004 "Dry brush").
+ * Two fixed channels on long free sweeps (撇 / 掃筆) only.
  */
 function getKasureChannels(compiled) {
   const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
   if (kScale <= 0) return [];
   const b = compiled.behavior;
-  const pts = compiled.samples;
-
-  if (!STROKE_VARIANTS.dryKasure) {
-    const origLen = compiled.origLen || 0;
-    const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
-    if (!b.isSweepEnd || b.isZiHengPie || b.isRoofHook || b.isRisingTi || b.isVerticalTi || origLen <= 45 || b.isRightNa || compiled.hookFeature || cornersCount > 1) {
-      return [];
-    }
-    return [
-      { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
-      { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
-    ];
-  }
-
-  const T = DRY_KASURE_TUNING;
   const origLen = compiled.origLen || 0;
-  if (b.isDot || b.isCrownDot || b.isRisingTi || !pts || pts.length < 12 || origLen < T.minLen) return [];
-
-  // Free endings (harai sweeps / na) leave the paper while moving, so dry splits run out through the tip.
-  // Stopped endings (tome, folds, box frames) press the tuft back together, so splits close again before the end
-  // and are kept narrower (this is what restrains enclosures such as 国 / 日).
-  const isFree = !!(b.isSweepEnd || b.isVerticalSweep || b.isRightNa) && !compiled.hookFeature;
-  compiled._kasureIsFree = isFree;
-  if (!compiled._dryness || compiled._dryness.length !== pts.length) {
-    const sstep = (a, bb, x) => { const t = Math.max(0, Math.min(1, (x - a) / (bb - a))); return t * t * (3 - 2 * t); };
-    compiled._dryness = pts.map(p => {
-      const wet = p.tuftWetness ?? 0.9;
-      return Math.max(0, Math.min(1, (T.wetOnset - wet) / T.wetSpan)) * sstep(T.uOnset, 0.92, p.u ?? 0);
-    });
+  const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
+  if (!b.isSweepEnd || b.isZiHengPie || b.isRoofHook || b.isRisingTi || b.isVerticalTi || origLen <= 45 || b.isRightNa || compiled.hookFeature || cornersCount > 1) {
+    return [];
   }
-  const dry = compiled._dryness;
-  let maxDry = 0;
-  let startIdx = -1;
-  for (let i = 0; i < dry.length; i++) {
-    if (dry[i] > maxDry) maxDry = dry[i];
-    if (startIdx < 0 && dry[i] > 0.12) startIdx = i;
-  }
-  if (maxDry < T.minDry || startIdx < 0) return [];
-
-  let startU = pts[startIdx].u;
-  let endU = isFree ? (maxDry > 0.45 ? 1.0 : 0.96) : T.stopEndU;
-  // Hooks: splits live on the shaft and close before the flick
-  if (compiled.hookFeature && typeof compiled.hookFeature.u === "number") endU = Math.min(endU, compiled.hookFeature.u - 0.02);
-  if (endU - startU < 0.08) return [];
-
-  const seed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233) * 43758.5453) % 1.0;
-  const jit = (k) => ((seed * (k + 3.7)) % 1.0) - 0.5;
-  const strength = (isFree ? T.freeWidth : T.stopWidth) * kScale;
-  const lats = (isFree && maxDry > T.threeSlitDry)
-    ? [0.30 + 0.06 * jit(1), 0.52 + 0.06 * jit(2), 0.70 + 0.06 * jit(3)]
-    : [0.37 + 0.08 * jit(1), 0.63 + 0.08 * jit(2)];
-  // Unequal widths and staggered starts keep the splits from reading as a regular barcode
-  const widthMul = [1.0, 0.72 + 0.2 * (jit(4) + 0.5), 0.55 + 0.2 * (jit(5) + 0.5)];
-  return lats.map((lat, j) => ({
-    lat,
-    startU: Math.min(endU - 0.06, startU + 0.035 * j + 0.03 * (jit(6 + j) + 0.5)),
-    endU,
-    widthFrac: strength * widthMul[j],
-    closed: !isFree || endU < 0.999,
-    seed: seed * 97.0 + j * 13.0,
-    dry: true
-  }));
+  return [
+    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
+    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
+  ];
 }
 
 /** Slit half-extent source: line width (px) and carve alpha at parameter t along a kasure channel. */
 function kasureSlitMetrics(compiled, ch, i, t, localWidth) {
-  if (ch.dry) {
-    const dryHere = (compiled._dryness && compiled._dryness[i]) || 0;
-    const grow = Math.max(0, Math.min(1, t / 0.30));
-    let env = grow * grow * (3 - 2 * grow);
-    if (ch.closed) {
-      // Stopped ending: the pressed tuft re-closes the split
-      const shut = Math.max(0, Math.min(1, (1 - t) / 0.22));
-      env *= shut * shut * (3 - 2 * shut);
-    }
-    // Broken feibai streak: low-frequency modulation along the stroke so the split catches and skips paper peaks
-    const s = (compiled.samples[i] && compiled.samples[i].s) || i * 0.28;
-    const streak = 0.5 + 0.5 * Math.sin(s * 0.55 + (ch.seed || 0)) * Math.sin(s * 0.23 + 1.7 * (ch.seed || 0));
-    const T = DRY_KASURE_TUNING;
-    return {
-      width: localWidth * ch.widthFrac * env * (0.45 + 0.55 * dryHere) * (1 - T.streakDepth + T.streakDepth * 2 * streak),
-      alpha: T.alpha * Math.min(1, t / 0.25) * (0.45 + 0.55 * dryHere)
-    };
-  }
   const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
   return {
     width: localWidth * ch.widthFrac * env,
@@ -3588,26 +3443,6 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const dSecond = (dPlus - 2.0 * d0 + dMinus) / (hStep * hStep);
   const kappa2 = Math.abs(dPrime) > 1e-4 ? Math.max(0.0, Math.min(2.4, -0.5 * dSecond / dPrime)) : 1.15;
 
-  // wetDryTrim: tuft dryness along the stroke (Xu et al. 2004 Eq. 17 wetness), sampled by arc parameter u
-  const trimDryLut = new Float32Array(65);
-  if (STROKE_VARIANTS.wetDryTrim) {
-    for (let k = 0; k <= 64; k++) {
-      const p = pts[Math.min(pts.length - 1, Math.round((k / 64) * (pts.length - 1)))];
-      const wet = p.tuftWetness ?? 0.9;
-      trimDryLut[k] = Math.max(0.0, Math.min(1.0, (WET_DRY_TRIM_TUNING.wetOnset - wet) / WET_DRY_TRIM_TUNING.wetSpan));
-    }
-  }
-  // dryKasure grain: per-u dry-brush dryness of this stroke (0 where the stroke does not split)
-  let kasureDryLut = null;
-  if (STROKE_VARIANTS.dryKasure && DRY_KASURE_TUNING.grain > 0 && getKasureChannels(compiled).length > 0 && compiled._dryness) {
-    kasureDryLut = new Float32Array(65);
-    for (let k = 0; k <= 64; k++) {
-      // Stopped strokes / frames carry proportionally less speckle, matching their narrower splits
-      const grainScale = compiled._kasureIsFree ? 1.0 : Math.min(1.0, DRY_KASURE_TUNING.stopWidth / Math.max(1e-3, DRY_KASURE_TUNING.freeWidth));
-      kasureDryLut[k] = grainScale * (compiled._dryness[Math.min(pts.length - 1, Math.round((k / 64) * (pts.length - 1)))] || 0.0);
-    }
-  }
-
   for (let ly = 0; ly < bh; ly++) {
     const rowOff = ly * bw;
     const gRowOff = (y0 + ly) * W + x0;
@@ -3793,46 +3628,6 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
           finalAlpha = Math.min(0.118, rawEdgeAlpha * Math.max(0.24, Math.min(1.38, 1.46 - 0.96 * hVal)));
         } else {
           finalAlpha = Math.min(0.97, rawEdgeAlpha);
-        }
-      }
-
-      // wetDryTrim (Chu & Tai 2005 Sec. 6.1, Eq. 11): trim the footprint where phi = [low-passed wet mask] - 0.5 + r_scale * rough < 0,
-      // so the silhouette follows paper-fibre roughness instead of the ideal contour.
-      // Two scales: fine fibre nibbling inside the low-passed rim, plus coarser bites where the wet front failed to reach
-      // between macro fibres. Bite depth grows as the tuft dries along the stroke, so wet entries stay clean.
-      if (STROKE_VARIANTS.wetDryTrim && mask > 0.01) {
-        const TT = WET_DRY_TRIM_TUNING;
-        let keep = 1.0;
-        if (mb < 0.98) {
-          const rough = 0.45 * fil + 0.35 * mFib + 0.20 * gZero;
-          const phiTrim = (mb - 0.48) + TT.fineRough * rough;
-          const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.10) / 0.20));
-          keep = tTrim * tTrim * (3.0 - 2.0 * tTrim);
-        }
-        const absVt = Math.abs(v);
-        if (absVt > 0.2 && absVt < 2.0) {
-          const edgeDist = Math.max(0.0, dSpine * (1.0 / absVt - 1.0));
-          const dryU = trimDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
-          const biteField = TT.macroMix * mFib + (1.0 - TT.macroMix) * fil;
-          const tb = Math.max(0.0, Math.min(1.0, (biteField - TT.biteLo) / (TT.biteHi - TT.biteLo)));
-          const depth = TT.depthPx * tb * tb * (3.0 - 2.0 * tb) * (TT.wetFloor + (1.0 - TT.wetFloor) * dryU);
-          if (depth > 0.05) {
-            const te = Math.max(0.0, Math.min(1.0, (edgeDist - depth + 0.9) / 1.8));
-            keep = Math.min(keep, te * te * (3.0 - 2.0 * te));
-          }
-        }
-        finalAlpha *= keep;
-      }
-
-      // dryKasure grain (Chu & Tai 2004 p. 81): a dry tuft only deposits on raised paper fibres, so the dry zone breaks
-      // into speckle along bristle tracks instead of carrying only clean vector splits
-      if (kasureDryLut && mask > 0.01 && Math.abs(v) < 0.95) {
-        const dk = kasureDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
-        if (dk > 0.02) {
-          const track = 0.5 + 0.5 * Math.sin(v * 23.0 + 2.1 * Math.sin(u * 9.0));
-          const peak = hVal + 0.35 * (track - 0.5);
-          const tp = Math.max(0.0, Math.min(1.0, (peak - (0.80 - 0.30 * dk)) / 0.12));
-          finalAlpha *= 1.0 - 0.9 * DRY_KASURE_TUNING.grain * dk * tp * tp * (3.0 - 2.0 * tp);
         }
       }
 

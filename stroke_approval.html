@@ -810,22 +810,16 @@ const DEFAULT_SLENDER_PHYSICS = {
 const SLENDER_PHYSICS = { ...DEFAULT_SLENDER_PHYSICS };
 
 /**
- * Opt-in stroke-shape variants awaiting visual approval (see stroke_approval.html). All default to false so the
- * established look is unchanged; each flag can be toggled independently at runtime.
+ * Stroke-shape variants reviewed in stroke_approval.html (decisions recorded in approvals/). Approved variants default
+ * to true; each flag can still be toggled independently at runtime to compare against the previous look.
  *  - anchoredEnds:   stroke-end forms keep absolute lengths instead of stretching with stroke length (Hsu & Lee 1994 Sec. 4.1)
  *  - ellipticalCaps: start/end caps follow the tuft cross-section ellipticity (Chu & Tai 2002 Sec. 4.1.2; Xu et al. 2004 Eq. 18)
- *  - mitreCorners:   angle-scaled outer shoulder and a mitred outer join at sharp corners (Hsu & Lee 1994 Sec. 4.1, Fig. 5)
  *  - strongCefeng:   oblique (Cefeng) posture visibly shifts the tuft toward one stroke edge (Xie et al. 2013 Sec. 4.1)
- *  - dryKasure:      dry-brush splits driven by the simulated tuft wetness on every long stroke, opening tails (Chu & Tai 2004)
- *  - wetDryTrim:     MoXi-style wet/dry boundary trimming with paper-fibre roughening of the silhouette (Chu & Tai 2005 Sec. 6.1)
  */
 const STROKE_VARIANTS = {
   anchoredEnds: true,
   ellipticalCaps: true,
-  mitreCorners: false,
-  strongCefeng: true,
-  dryKasure: false,
-  wetDryTrim: false
+  strongCefeng: true
 };
 
 /*
@@ -851,38 +845,10 @@ const STRONG_CEFENG_TUNING = {
   entryFloor: 0.6       // share of the shift kept at an exposed-tip (lufeng) entry
 };
 
-const DRY_KASURE_TUNING = {
-  minLen: 40,           // KanjiVG units: shorter strokes never split
-  wetOnset: 0.86,       // tuft wetness below which the tip starts to split (higher = earlier, on more strokes)
-  wetSpan: 0.10,
-  uOnset: 0.40,
-  minDry: 0.20,
-  freeWidth: 0.14,      // split width as a fraction of the local stroke width, free (harai) endings
-  stopWidth: 0.07,      // stopped / framed endings
-  stopEndU: 0.90,
-  threeSlitDry: 0.65,
-  streakDepth: 0.35,    // how much each split pinches and swells along the stroke
-  alpha: 0.75,          // how completely a split removes ink (1 = bare paper)
-  grain: 0.5            // paper-peak speckle in the dry zone (Chu & Tai 2004 p. 81 peak catching)
-};
-
-const WET_DRY_TRIM_TUNING = {
-  depthPx: 3.5,         // maximum bite depth into the contour, canvas px at the 792 px box
-  fineRough: 0.36,      // fine fibre nibbling inside the low-passed rim (Chu & Tai 2005 Eq. 11 r_scale)
-  macroMix: 0.7,        // share of the macro-fibre field (vs. fine filaments) that shapes the bites
-  biteLo: 0.10,         // bite threshold on the fibre field (higher = fewer bites)
-  biteHi: 0.60,
-  wetFloor: 0.15,       // fraction of the bite depth present even where the tuft is still fully wet
-  wetOnset: 0.93,
-  wetSpan: 0.15
-};
-
 const STROKE_VARIANT_TUNING = {
   anchoredEnds: ANCHORED_ENDS_TUNING,
   ellipticalCaps: ELLIPTICAL_CAPS_TUNING,
-  strongCefeng: STRONG_CEFENG_TUNING,
-  dryKasure: DRY_KASURE_TUNING,
-  wetDryTrim: WET_DRY_TRIM_TUNING
+  strongCefeng: STRONG_CEFENG_TUNING
 };
 
 function getStrokeVariantKey() {
@@ -1520,7 +1486,7 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
           const bell = 0.5 * (1 + Math.cos(t * Math.PI));
           poolWeight = Math.max(poolWeight, 0.95 * bell);
           const isAcute = behavior.isPieZhe && cf.angle > 1.0;
-          const outerBoost = (isAcute ? 0.0 : (STROKE_VARIANTS.mitreCorners ? 0.06 + 0.26 * Math.sin(Math.min(cf.angle, Math.PI / 2)) : 0.16)) * tonMult;
+          const outerBoost = (isAcute ? 0.0 : 0.16) * tonMult;
           const innerPinch = isAcute ? 0.52 : 0.14;
           const innerFloor = isAcute ? 0.20 : 0.68;
 
@@ -2061,44 +2027,6 @@ function compileStrokePhysics(stroke, boxX, boxY, boxSize, totalCharStrokes = 10
     }
   }
 
-  // mitreCorners: replace the round outer join of sharp corners by a mitre vertex (bevelled when it would spike)
-  if (STROKE_VARIANTS.mitreCorners && !hookFeature) {
-    for (const cf of cornerFeatures) {
-      if (cf.angle < 0.55) continue;
-      if (behavior.isPieZhe && cf.angle > 1.0) continue;
-      const K = 5;
-      const iA = Math.max(1, cf.index - K);
-      const iB = Math.min(numSamples - 1, cf.index + K);
-      if (iB - iA < 4) continue;
-      const outerIsRight = cf.turnSign >= 0;
-      const getO = (idx) => outerIsRight ? { x: rawPts[idx].rx, y: rawPts[idx].ry } : { x: rawPts[idx].lx, y: rawPts[idx].ly };
-      const setO = (idx, pt) => {
-        if (outerIsRight) { rawPts[idx].rx = pt.x; rawPts[idx].ry = pt.y; } else { rawPts[idx].lx = pt.x; rawPts[idx].ly = pt.y; }
-      };
-      const pA = getO(iA);
-      const pB = getO(iB);
-      // Offset-line directions are the spine tangents on each side of the corner (straight segments, not the smoothed turn)
-      const tA = { x: rawPts[iA].tx, y: rawPts[iA].ty };
-      const tB = { x: rawPts[iB].tx, y: rawPts[iB].ty };
-      const det = tA.x * tB.y - tA.y * tB.x;
-      if (Math.abs(det) < 0.15) continue;
-      const wx = pB.x - pA.x;
-      const wy = pB.y - pA.y;
-      const tA_s = (wx * tB.y - wy * tB.x) / det;
-      const M = { x: pA.x + tA.x * tA_s, y: pA.y + tA.y * tA_s };
-      const rOuter = outerIsRight ? clampedRR[cf.index] : clampedRL[cf.index];
-      const miterLen = Math.hypot(M.x - rawPts[cf.index].x, M.y - rawPts[cf.index].y);
-      // Bevel instead of mitre when the spike would exceed 2.6 stroke half-widths or points backwards
-      if (!(tA_s > 0) || miterLen > 2.6 * Math.max(rOuter, 1e-3)) continue;
-      for (let j = iA + 1; j < iB; j++) {
-        const f = j <= cf.index ? (j - iA) / Math.max(1, cf.index - iA) : (j - cf.index) / Math.max(1, iB - cf.index);
-        const from = j <= cf.index ? pA : M;
-        const to = j <= cf.index ? M : pB;
-        setO(j, { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f });
-      }
-    }
-  }
-
   // Expanded corner features for geometry and evaluation
   const evalCornerFeatures = [...cornerFeatures];
   // Also detect short-stroke flick corner like 心 s3 (origLen < 25)
@@ -2347,98 +2275,25 @@ function drawFleshyHookWedgePath(compiled, limitIdx, heelIdx) {
 
 /**
  * Dry-brush (kasure / feibai) slit channels for a compiled stroke.
- * Default: two fixed channels on long free sweeps (撇 / 掃筆) only.
- * dryKasure: channels placed where the simulated tuft wetness (Xu et al. 2004 Eq. 17) has run low, on any long stroke;
- * strongly dry tails keep their slits open to the contour so the tip forks (Chu & Tai 2002 Sec. 3; 2004 "Dry brush").
+ * Two fixed channels on long free sweeps (撇 / 掃筆) only.
  */
 function getKasureChannels(compiled) {
   const kScale = (SLENDER_PHYSICS.kasureAmount ?? 0.30) / 0.30;
   if (kScale <= 0) return [];
   const b = compiled.behavior;
-  const pts = compiled.samples;
-
-  if (!STROKE_VARIANTS.dryKasure) {
-    const origLen = compiled.origLen || 0;
-    const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
-    if (!b.isSweepEnd || b.isZiHengPie || b.isRoofHook || b.isRisingTi || b.isVerticalTi || origLen <= 45 || b.isRightNa || compiled.hookFeature || cornersCount > 1) {
-      return [];
-    }
-    return [
-      { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
-      { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
-    ];
-  }
-
-  const T = DRY_KASURE_TUNING;
   const origLen = compiled.origLen || 0;
-  if (b.isDot || b.isCrownDot || b.isRisingTi || !pts || pts.length < 12 || origLen < T.minLen) return [];
-
-  // Free endings (harai sweeps / na) leave the paper while moving, so dry splits run out through the tip.
-  // Stopped endings (tome, folds, box frames) press the tuft back together, so splits close again before the end
-  // and are kept narrower (this is what restrains enclosures such as 国 / 日).
-  const isFree = !!(b.isSweepEnd || b.isVerticalSweep || b.isRightNa) && !compiled.hookFeature;
-  compiled._kasureIsFree = isFree;
-  if (!compiled._dryness || compiled._dryness.length !== pts.length) {
-    const sstep = (a, bb, x) => { const t = Math.max(0, Math.min(1, (x - a) / (bb - a))); return t * t * (3 - 2 * t); };
-    compiled._dryness = pts.map(p => {
-      const wet = p.tuftWetness ?? 0.9;
-      return Math.max(0, Math.min(1, (T.wetOnset - wet) / T.wetSpan)) * sstep(T.uOnset, 0.92, p.u ?? 0);
-    });
+  const cornersCount = compiled.cornerFeatures ? compiled.cornerFeatures.length : 0;
+  if (!b.isSweepEnd || b.isZiHengPie || b.isRoofHook || b.isRisingTi || b.isVerticalTi || origLen <= 45 || b.isRightNa || compiled.hookFeature || cornersCount > 1) {
+    return [];
   }
-  const dry = compiled._dryness;
-  let maxDry = 0;
-  let startIdx = -1;
-  for (let i = 0; i < dry.length; i++) {
-    if (dry[i] > maxDry) maxDry = dry[i];
-    if (startIdx < 0 && dry[i] > 0.12) startIdx = i;
-  }
-  if (maxDry < T.minDry || startIdx < 0) return [];
-
-  let startU = pts[startIdx].u;
-  let endU = isFree ? (maxDry > 0.45 ? 1.0 : 0.96) : T.stopEndU;
-  // Hooks: splits live on the shaft and close before the flick
-  if (compiled.hookFeature && typeof compiled.hookFeature.u === "number") endU = Math.min(endU, compiled.hookFeature.u - 0.02);
-  if (endU - startU < 0.08) return [];
-
-  const seed = Math.abs(Math.sin(pts[0].x * 12.9898 + pts[0].y * 78.233) * 43758.5453) % 1.0;
-  const jit = (k) => ((seed * (k + 3.7)) % 1.0) - 0.5;
-  const strength = (isFree ? T.freeWidth : T.stopWidth) * kScale;
-  const lats = (isFree && maxDry > T.threeSlitDry)
-    ? [0.30 + 0.06 * jit(1), 0.52 + 0.06 * jit(2), 0.70 + 0.06 * jit(3)]
-    : [0.37 + 0.08 * jit(1), 0.63 + 0.08 * jit(2)];
-  // Unequal widths and staggered starts keep the splits from reading as a regular barcode
-  const widthMul = [1.0, 0.72 + 0.2 * (jit(4) + 0.5), 0.55 + 0.2 * (jit(5) + 0.5)];
-  return lats.map((lat, j) => ({
-    lat,
-    startU: Math.min(endU - 0.06, startU + 0.035 * j + 0.03 * (jit(6 + j) + 0.5)),
-    endU,
-    widthFrac: strength * widthMul[j],
-    closed: !isFree || endU < 0.999,
-    seed: seed * 97.0 + j * 13.0,
-    dry: true
-  }));
+  return [
+    { lat: 0.38, startU: 0.76, endU: 0.94, widthFrac: 0.055 * kScale },
+    { lat: 0.66, startU: 0.80, endU: 0.95, widthFrac: 0.055 * kScale }
+  ];
 }
 
 /** Slit half-extent source: line width (px) and carve alpha at parameter t along a kasure channel. */
 function kasureSlitMetrics(compiled, ch, i, t, localWidth) {
-  if (ch.dry) {
-    const dryHere = (compiled._dryness && compiled._dryness[i]) || 0;
-    const grow = Math.max(0, Math.min(1, t / 0.30));
-    let env = grow * grow * (3 - 2 * grow);
-    if (ch.closed) {
-      // Stopped ending: the pressed tuft re-closes the split
-      const shut = Math.max(0, Math.min(1, (1 - t) / 0.22));
-      env *= shut * shut * (3 - 2 * shut);
-    }
-    // Broken feibai streak: low-frequency modulation along the stroke so the split catches and skips paper peaks
-    const s = (compiled.samples[i] && compiled.samples[i].s) || i * 0.28;
-    const streak = 0.5 + 0.5 * Math.sin(s * 0.55 + (ch.seed || 0)) * Math.sin(s * 0.23 + 1.7 * (ch.seed || 0));
-    const T = DRY_KASURE_TUNING;
-    return {
-      width: localWidth * ch.widthFrac * env * (0.45 + 0.55 * dryHere) * (1 - T.streakDepth + T.streakDepth * 2 * streak),
-      alpha: T.alpha * Math.min(1, t / 0.25) * (0.45 + 0.55 * dryHere)
-    };
-  }
   const env = Math.sin(Math.min(1.0, t / 0.35) * (Math.PI * 0.5)) * (1.0 - 0.25 * Math.pow(t, 2));
   return {
     width: localWidth * ch.widthFrac * env,
@@ -3722,26 +3577,6 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
   const dSecond = (dPlus - 2.0 * d0 + dMinus) / (hStep * hStep);
   const kappa2 = Math.abs(dPrime) > 1e-4 ? Math.max(0.0, Math.min(2.4, -0.5 * dSecond / dPrime)) : 1.15;
 
-  // wetDryTrim: tuft dryness along the stroke (Xu et al. 2004 Eq. 17 wetness), sampled by arc parameter u
-  const trimDryLut = new Float32Array(65);
-  if (STROKE_VARIANTS.wetDryTrim) {
-    for (let k = 0; k <= 64; k++) {
-      const p = pts[Math.min(pts.length - 1, Math.round((k / 64) * (pts.length - 1)))];
-      const wet = p.tuftWetness ?? 0.9;
-      trimDryLut[k] = Math.max(0.0, Math.min(1.0, (WET_DRY_TRIM_TUNING.wetOnset - wet) / WET_DRY_TRIM_TUNING.wetSpan));
-    }
-  }
-  // dryKasure grain: per-u dry-brush dryness of this stroke (0 where the stroke does not split)
-  let kasureDryLut = null;
-  if (STROKE_VARIANTS.dryKasure && DRY_KASURE_TUNING.grain > 0 && getKasureChannels(compiled).length > 0 && compiled._dryness) {
-    kasureDryLut = new Float32Array(65);
-    for (let k = 0; k <= 64; k++) {
-      // Stopped strokes / frames carry proportionally less speckle, matching their narrower splits
-      const grainScale = compiled._kasureIsFree ? 1.0 : Math.min(1.0, DRY_KASURE_TUNING.stopWidth / Math.max(1e-3, DRY_KASURE_TUNING.freeWidth));
-      kasureDryLut[k] = grainScale * (compiled._dryness[Math.min(pts.length - 1, Math.round((k / 64) * (pts.length - 1)))] || 0.0);
-    }
-  }
-
   for (let ly = 0; ly < bh; ly++) {
     const rowOff = ly * bw;
     const gRowOff = (y0 + ly) * W + x0;
@@ -3927,46 +3762,6 @@ function renderPhysicallyBasedInkDispersionAndOptics(ctx, compiled, limitIdx, to
           finalAlpha = Math.min(0.118, rawEdgeAlpha * Math.max(0.24, Math.min(1.38, 1.46 - 0.96 * hVal)));
         } else {
           finalAlpha = Math.min(0.97, rawEdgeAlpha);
-        }
-      }
-
-      // wetDryTrim (Chu & Tai 2005 Sec. 6.1, Eq. 11): trim the footprint where phi = [low-passed wet mask] - 0.5 + r_scale * rough < 0,
-      // so the silhouette follows paper-fibre roughness instead of the ideal contour.
-      // Two scales: fine fibre nibbling inside the low-passed rim, plus coarser bites where the wet front failed to reach
-      // between macro fibres. Bite depth grows as the tuft dries along the stroke, so wet entries stay clean.
-      if (STROKE_VARIANTS.wetDryTrim && mask > 0.01) {
-        const TT = WET_DRY_TRIM_TUNING;
-        let keep = 1.0;
-        if (mb < 0.98) {
-          const rough = 0.45 * fil + 0.35 * mFib + 0.20 * gZero;
-          const phiTrim = (mb - 0.48) + TT.fineRough * rough;
-          const tTrim = Math.max(0.0, Math.min(1.0, (phiTrim + 0.10) / 0.20));
-          keep = tTrim * tTrim * (3.0 - 2.0 * tTrim);
-        }
-        const absVt = Math.abs(v);
-        if (absVt > 0.2 && absVt < 2.0) {
-          const edgeDist = Math.max(0.0, dSpine * (1.0 / absVt - 1.0));
-          const dryU = trimDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
-          const biteField = TT.macroMix * mFib + (1.0 - TT.macroMix) * fil;
-          const tb = Math.max(0.0, Math.min(1.0, (biteField - TT.biteLo) / (TT.biteHi - TT.biteLo)));
-          const depth = TT.depthPx * tb * tb * (3.0 - 2.0 * tb) * (TT.wetFloor + (1.0 - TT.wetFloor) * dryU);
-          if (depth > 0.05) {
-            const te = Math.max(0.0, Math.min(1.0, (edgeDist - depth + 0.9) / 1.8));
-            keep = Math.min(keep, te * te * (3.0 - 2.0 * te));
-          }
-        }
-        finalAlpha *= keep;
-      }
-
-      // dryKasure grain (Chu & Tai 2004 p. 81): a dry tuft only deposits on raised paper fibres, so the dry zone breaks
-      // into speckle along bristle tracks instead of carrying only clean vector splits
-      if (kasureDryLut && mask > 0.01 && Math.abs(v) < 0.95) {
-        const dk = kasureDryLut[Math.max(0, Math.min(64, Math.round(u * 64)))];
-        if (dk > 0.02) {
-          const track = 0.5 + 0.5 * Math.sin(v * 23.0 + 2.1 * Math.sin(u * 9.0));
-          const peak = hVal + 0.35 * (track - 0.5);
-          const tp = Math.max(0.0, Math.min(1.0, (peak - (0.80 - 0.30 * dk)) / 0.12));
-          finalAlpha *= 1.0 - 0.9 * DRY_KASURE_TUNING.grain * dk * tp * tp * (3.0 - 2.0 * tp);
         }
       }
 
@@ -6342,7 +6137,7 @@ document.addEventListener("DOMContentLoaded", () => {
 <script>
 (function () {
   "use strict";
-  const DATA = {"chars": ["永", "道", "心", "成", "水", "井", "力", "九", "長", "必", "国", "日"], "strokes": {"永": [{"id": "kvg:06c38-s1", "d": "M45.5,13.25c5.12,2.4,8.62,5.75,10.75,9", "type": "㇔", "component": "丶"}, {"id": "kvg:06c38-s2", "d": "M31.75,37.25c1.88,0.75,4.12,1,6.07,0.55c3.62-0.83,9.41-2.51,13.04-3.35c3-0.7,5.16,0.8,5.16,4.05c0,14.5-0.26,45.45-0.26,50c0,12-7.02,2.84-8.52,1.7", "type": "㇆/㇚", "component": "水"}, {"id": "kvg:06c38-s3", "d": "M14.25,58.68c1.75,0.45,3.46,0.3,5-0.02c2.5-0.53,12.84-3.54,15.34-4.49c2.5-0.95,4.65,0.77,3.75,2.85C33.5,68.25,25.75,79.75,16,86.37", "type": "㇇", "component": "水"}, {"id": "kvg:06c38-s4", "d": "M81.22,36.52c-0.1,1.11-0.78,2.03-1.52,2.7c-4.83,4.38-13.96,9.73-21.46,11.92", "type": "㇒", "component": "水"}, {"id": "kvg:06c38-s5", "d": "M58,52.74c9.88,9.52,20.02,18.85,29.07,24.84c2.01,1.33,4.05,2.66,6.43,3.56", "type": "㇏", "component": "水"}], "道": [{"id": "kvg:09053-s1", "d": "M49.38,14.88c2.61,1.78,6.73,7.3,7.38,10.06", "type": "㇔", "component": "首"}, {"id": "kvg:09053-s2", "d": "M77.25,12.5c0.06,0.84-0.03,1.66-0.37,2.42c-1.38,3.08-3.38,6.7-6.63,10.2", "type": "㇒", "component": "首"}, {"id": "kvg:09053-s3", "d": "M42.06,32.6c1.75,0.45,4.97,0.38,6.7,0.2c9.99-1.05,25.86-2.93,36.82-3.2c2.91-0.07,4.8,0.15,6.12,0.44", "type": "㇐", "component": "首"}, {"id": "kvg:09053-s4", "d": "M64.26,33.62c0.25,0.1-0.23,1.75-0.39,2.04c-1.03,1.93-2.08,4.55-4.5,7.09", "type": "㇒", "component": "自"}, {"id": "kvg:09053-s5", "d": "M51.06,43.52c0.77,0.77,1.13,1.71,1.13,2.82c0,0.9-0.1,22.98-0.06,31.9c0.01,2.08,0.03,3.45,0.06,3.66", "type": "㇑", "component": "目"}, {"id": "kvg:09053-s6", "d": "M53.01,45.09c6.24-0.71,22.66-2.75,24.6-2.88c1.96-0.14,3.35,0.55,3.35,2.81c0,1.08-0.57,23.4-0.8,32.24c-0.05,2-0.09,3.28-0.12,3.43", "type": "㇕a", "component": "目"}, {"id": "kvg:09053-s7", "d": "M52.9,55.9c6.1-0.4,20.85-2.15,26.64-2.34", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s8", "d": "M53.11,67.65c6.85-0.47,19.47-1.75,26.13-1.75", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s9", "d": "M53.36,79.25c5.14,0,18.66-1.07,25.31-1.07", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s10", "d": "M19.75,20c3.38,1.75,8,6.12,9.5,8.75", "type": "㇔", "component": "⻌"}, {"id": "kvg:09053-s11", "d": "M13,51.53c2.25,0.86,3.75,0.43,4.75,0.22s9-3.47,10.5-3.9c2.96-0.85,4.22,0.21,2.44,3.03c-6.56,10.38-6.81,8.5-0.11,14.4c2.39,2.1,2.15,3.52-0.57,5.48C25.5,74,21.75,76.25,17.5,79.04", "type": "㇋", "component": "⻌"}, {"id": "kvg:09053-s12", "d": "M12.5,81.71c3.11-0.47,9.22-0.87,13.97-0.71c7.15,0.25,31.13,8.25,35.71,9.46C74.61,93.76,81.62,95.5,91,96.05", "type": "㇏a", "component": "⻌"}], "心": [{"id": "kvg:05fc3-s1", "d": "M16.88,52.75c0,6.32-1.46,17.69-3.75,23", "type": "㇔", "component": "心"}, {"id": "kvg:05fc3-s2", "d": "M31.25,49.25c9,22.75,27,35.5,53.25,32.25c7.75-0.96,7.25-4.75,3-9.5", "type": "㇃", "component": "心"}, {"id": "kvg:05fc3-s3", "d": "M50.25,26c2,5.12,7.5,13.75,8.75,7.75", "type": "㇔a", "component": "心"}, {"id": "kvg:05fc3-s4", "d": "M85.5,30c4,2.75,7.62,7,10.5,14", "type": "㇔", "component": "心"}], "成": [{"id": "kvg:06210-s1", "d": "M25.9,31.5c0.99,0.99,1.24,2.38,1.24,3.74c0,18.01-2.39,42.26-15.08,56.97", "type": "㇒", "component": "丿"}, {"id": "kvg:06210-s2", "d": "M27.5,33.7c2.12,0.68,5.54,0.04,8.37-0.26c9.61-1.04,30.55-3.41,42.77-4.41c3.06-0.25,5.85-0.38,8.86,0.26", "type": "㇐", "component": "弋"}, {"id": "kvg:06210-s3", "d": "M27.5,56.26c6.88-1.01,16.84-3.16,18.88-3.27c2.37-0.12,3.59,1.18,3.23,3.67c-0.35,2.48-2.34,19.81-7.55,26.56c-1.56,2.03-4.39,0.14-5.79-1.34", "type": "㇆a", "component": "𠂊"}, {"id": "kvg:06210-s4", "d": "M56,10.5c2.35,2.61,2.42,4.92,2.84,8.38C62.62,50.38,68,73,91.45,92.7c5.73,4.81,5.5,0.78,4.69-7.24", "type": "㇂", "component": "戈"}, {"id": "kvg:06210-s5", "d": "M82.98,45.14c0.27,1.36,0.21,2.71-0.16,4.2C80.5,58.62,71,77.5,55.06,89.47", "type": "㇒", "component": "丿"}, {"id": "kvg:06210-s6", "d": "M75.25,11.75c2.94,1.6,7.63,5.26,9,8", "type": "㇔", "component": "丶"}], "水": [{"id": "kvg:06c34-s1", "d": "M52.77,15.08c1.08,1.08,1.67,2.49,1.76,5.52c0.4,14.55-0.26,62.16-0.26,67.12c0,9.78-7.52,0.03-9.02-1.22", "type": "㇚", "component": "水"}, {"id": "kvg:06c34-s2", "d": "M17.5,45.75c1.75,0.62,3.73,0.43,5.25,0C25.88,44.88,36.09,41,38.59,40s4.47,1.24,3.75,3.5C39,54,28.25,69,19,74.75", "type": "㇇", "component": "水"}, {"id": "kvg:06c34-s3", "d": "M81.22,27.5c-0.22,1.25-0.72,2.25-1.52,2.97c-5.64,5.1-12.45,9.78-22.45,13.78", "type": "㇒", "component": "水"}, {"id": "kvg:06c34-s4", "d": "M57,46c8.82,10.73,19.23,21.46,28.42,27.42c2.16,1.4,4.52,3,7.08,3.58", "type": "㇏", "component": "水"}], "井": [{"id": "kvg:04e95-s1", "d": "M23.5,36.9c2.13,0.77,4.95,0.45,7.14,0.16c10.59-1.37,37.06-3.96,49.24-4.82c2.63-0.19,4.81-0.18,7.38,0.38", "type": "㇐", "component": "二"}, {"id": "kvg:04e95-s2", "d": "M14.25,62.95c3.44,1.23,7.55,0.89,11.12,0.49c12.88-1.44,42.51-4.32,61.11-5.17c3.37-0.15,6.23,0.06,9.52,0.77", "type": "㇐", "component": "十"}, {"id": "kvg:04e95-s3", "d": "M40,16.5c0.75,1,0.98,2.47,1,3.5c1.12,55.5-2.38,62-19.25,78.25", "type": "㇒", "component": "丿"}, {"id": "kvg:04e95-s4", "d": "M66.62,11.25c0.88,0.88,1.21,2.25,1.21,3.5c0,0.73-0.06,54.49-0.07,77.38c0,3.92,0,6.94,0,8.62", "type": "㇑", "component": "十"}], "力": [{"id": "kvg:0529b-s1", "d": "M21.5,38.25c2.71,1.16,5.48,1.13,8.27,0.71c14.44-2.14,39.36-6.21,53.23-8.21c4.48-0.65,6.25,1.38,5.5,5.75c-2.81,16.37-9,38.75-20,53.25c-6.14,8.09-9.5,3-12.5-0.75", "type": "㇆", "component": "力"}, {"id": "kvg:0529b-s2", "d": "M56.88,13.68c0.62,2.57,0.56,4.63,0,7.19c-4.11,18.97-16.53,49.27-43.49,68.79", "type": "㇒", "component": "力"}], "九": [{"id": "kvg:04e5d-s1", "d": "M41.88,14.38c1,1.38,1.5,3.25,1.5,5.12c0,40.13-9.12,57.5-28.5,68.75", "type": "㇒", "component": "丿"}, {"id": "kvg:04e5d-s2", "d": "M13.5,45.75c2.88,0.85,5.78,0.05,8.58-0.66c8.47-2.14,39.88-9.79,40.92-9.84c2.5-0.12,4.75,0.5,4.25,4.75c-0.5,4.25-5.5,20.75-7,32.5c-2.23,17.46,2,19.37,18.21,19.37c13.79,0,19.01-1.07,19.27-10.12", "type": "㇈", "component": "乙"}], "長": [{"id": "kvg:09577-s1", "d": "M34,14.75C35.25,16,36,18,36,19.5s0,33.5,0,35.75", "type": "㇑a", "component": "長"}, {"id": "kvg:09577-s2", "d": "M37.75,16c9.6-0.15,21.73-3.26,26.63-4.2c1.97-0.38,3.9-0.41,5.87,0.06", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s3", "d": "M37.25,29.5C48.12,28.25,57,27,64,25.72c1.96-0.36,3.76-0.25,5.25,0.06", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s4", "d": "M37.5,42.5c8.88-0.86,21.62-2.62,26.75-3.53c1.97-0.35,3.88-0.32,5.75,0", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s5", "d": "M10.88,58.23c3.14,0.86,6.44,0.68,9.62,0.29c19.73-2.35,44.86-6.1,65-7.61c2.97-0.22,5.7-0.08,8.63,0.4", "type": "㇐", "component": "長"}, {"id": "kvg:09577-s6", "d": "M31.25,60.25c0.94,0.94,1.39,2.38,1.39,4c0,11.82-0.7,28.19-0.7,30.19s1.65,3.14,3.74,1.64c2.09-1.5,17.25-11.09,20.03-12.59", "type": "㇙", "component": "長"}, {"id": "kvg:09577-s7", "d": "M76.52,55.25c0.23,1.25-0.33,2.45-1.05,3.41C73.5,61.25,69.62,65,64.62,68.75", "type": "㇒", "component": "長"}, {"id": "kvg:09577-s8", "d": "M46.5,62.25c8.21,0,34.52,25.9,44.28,29.5C93.12,92.61,94.51,93,97,93.5", "type": "㇏", "component": "長"}], "必": [{"id": "kvg:05fc5-s1", "d": "M40.5,24.5c2,6.12,6.65,13.65,7.75,7.36", "type": "㇔", "component": "丶"}, {"id": "kvg:05fc5-s2", "d": "M69.62,24.88c0.13,1.56-0.22,3.02-0.77,5.26c-3.24,13.24-18.84,45.88-46.29,61.08", "type": "㇒", "component": "丿"}, {"id": "kvg:05fc5-s3", "d": "M31,44.5c9.62,23,21.12,42.5,47,43.44c10.24,0.37,7.75-3.89,3.5-9.35", "type": "㇃", "component": "心"}, {"id": "kvg:05fc5-s4", "d": "M17.75,51.81c-0.5,8.44-1.63,14.44-3.75,21.69", "type": "㇔", "component": "心"}, {"id": "kvg:05fc5-s5", "d": "M84.25,44.88c4.49,3.51,9.38,10.38,11.5,17.54", "type": "㇔", "component": "心"}], "国": [{"id": "kvg:056fd-s1", "d": "M19,16.82c1.09,1.09,1.61,2.51,1.61,4.41c0,14.65-0.22,44.9-0.22,71.53c0,1.95-0.06,3.86-0.09,5.75", "type": "㇑", "component": "囗"}, {"id": "kvg:056fd-s2", "d": "M21.52,18.67C41.38,16.75,74.03,13.5,85,13.5c3.38,0,5,1.85,5,5.25c0,15.36-0.04,47.89-0.08,70.62c0,1.68,0,3.31,0,4.88", "type": "㇕a", "component": "囗"}, {"id": "kvg:056fd-s3", "d": "M35.12,33.88c1.32,0.28,4.2,0.44,5.51,0.28c10.47-1.29,20.62-2.54,28.62-3.13c2.02-0.15,3.88-0.19,5.56,0.04", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s4", "d": "M52.8,34.89c0.96,0.97,1.47,2.48,1.47,3.81c0,3.99-0.13,24.74-0.09,33.55", "type": "㇑a", "component": "王"}, {"id": "kvg:056fd-s5", "d": "M37.58,52.16c1.79,0.22,3.41,0.14,5.36-0.08c7.56-0.83,17.56-1.99,25.38-2.8c1.25-0.13,4.02-0.15,5.89,0.17", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s6", "d": "M31.08,75.14c1.54,0.36,3.85,0.28,5.19,0.16c9.98-0.92,25.85-2.67,37.03-3.54c2.15-0.17,5.04-0.18,6.12,0.13", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s7", "d": "M67.75,56.62c3,1.75,6.12,5.12,8,8.38", "type": "㇔", "component": "丶"}, {"id": "kvg:056fd-s8", "d": "M21.5,93.01c14.25-0.51,48.38-1.89,67-2.51", "type": "㇐a", "component": "囗"}], "日": [{"id": "kvg:065e5-s1", "d": "M31.5,24.5c1.12,1.12,1.74,2.75,1.74,4.75c0,1.6-0.16,38.11-0.09,53.5c0.02,3.82,0.05,6.35,0.09,6.75", "type": "㇑", "component": "日"}, {"id": "kvg:065e5-s2", "d": "M33.48,26c0.8-0.05,37.67-3.01,40.77-3.25c3.19-0.25,5,1.75,5,4.25c0,4-0.22,40.84-0.23,56c0,3.48,0,5.72,0,6", "type": "㇕a", "component": "日"}, {"id": "kvg:065e5-s3", "d": "M34.22,55.25c7.78-0.5,35.9-2.5,44.06-2.75", "type": "㇐a", "component": "日"}, {"id": "kvg:065e5-s4", "d": "M34.23,86.5c10.52-0.75,34.15-2.12,43.81-2.25", "type": "㇐a", "component": "日"}]}, "variants": [{"id": "ellipticalCaps", "title": "Elliptical start / end caps", "jp": "楕円断面の起筆・収筆", "summary": "Pressed starts and tome (stop) ends become half-ellipses whose depth follows the simulated tuft flattening, instead of a nearly flat chop.", "why": "Chu & Tai 2002 Sec. 4.1.2 / 2004 model the tuft footprint as two half-ellipses; Xu et al. 2004 Eq. 18 elongates the ellipse with sideways drag. The current caps use fixed shallow fractions of the width and never read the ellipticity the model already computes.", "affects": "Every stroke with a blunt start or end (horizontals, verticals, dots, 横折 ends). Sharp-tipped strokes (撇 / 捺 tails, 鉤) are unchanged.", "risk": "Ends look rounder / softer. May feel less crisp for a 瘦金體 (slender gold) style that prefers squared ends.", "look_for": "Left and right ends of horizontals, the top of verticals, dots.", "params": [{"key": "exitDepth", "label": "End-cap roundness", "min": 0.15, "max": 0.8, "step": 0.01}, {"key": "entryDepth", "label": "Start-cap roundness", "min": 0.1, "max": 0.7, "step": 0.01}, {"key": "ellipticityGain", "label": "Extra roundness when the tuft is flattened", "min": 0.0, "max": 0.8, "step": 0.02}]}, {"id": "mitreCorners", "title": "Mitred outer corners", "jp": "折れ角の外側を鋭角に（マイター）", "summary": "At sharp turns (横折, 竖折, zigzags) the outer edge becomes a crisp mitre vertex instead of a round join, and the corner bulge scales with the turn angle.", "why": "Hsu & Lee 1994 Sec. 4.1 and Fig. 5 describe mitre / bevel / round joints for strongly bent strokes. Currently the outer shoulder is a constant boost followed by Laplacian + Chaikin smoothing, which always yields a round join.", "affects": "Strokes with a detected corner of at least ~30 degrees: 口 / 国 boxes, 横折, 竖折, 横折钩 bodies, zigzag 折.", "risk": "Bevel fallback is used when the spike would exceed 2.6 half-widths. Very acute turns are left alone (撇折). Corners can look hard or mechanical for a brush-like feel.", "look_for": "Top-right corner of 口 / 日 / 国 boxes; the 折 corners in 道 and 永."}, {"id": "strongCefeng", "title": "Stronger oblique-brush (側鋒) posture", "jp": "側鋒の効果を強める", "summary": "When the brush is slanted (側鋒) the tuft clearly shifts toward one stroke edge and the tone becomes asymmetric (tip side darker, belly side lighter); exposed-tip (露鋒) starts keep that shift from the first millimetre.", "why": "Xie et al. 2013 Sec. 4.1: in the oblique style the tip touches one side of the boundary and the belly is tangent to the other; Chu & Tai 2002 Sec. 2 describes slanted strokes the same way. Today the spine moves only ~5% of the width, so upright and oblique strokes look the same.", "affects": "All strokes whose entry direction differs from the nib angle (mostly 撇, 点, 横 with a slanted attack).", "risk": "Shifts where the contour sits relative to the KanjiVG centreline (a few px) and raises tonal contrast across the width. Strength is a model choice rather than a measured value.", "look_for": "Tonal asymmetry across 撇 and 点, slight lateral offset of slanted 横.", "params": [{"key": "shiftGain", "label": "Tuft shift toward one edge", "min": 0.0, "max": 0.6, "step": 0.01}, {"key": "shiftCap", "label": "Maximum shift (fraction of width)", "min": 0.05, "max": 0.6, "step": 0.01}, {"key": "toneGain", "label": "Tip-side vs. belly-side tone contrast", "min": 1.0, "max": 5.0, "step": 0.1}, {"key": "entryFloor", "label": "Shift already present at an exposed-tip start", "min": 0.0, "max": 1.0, "step": 0.05}]}, {"id": "dryKasure", "title": "Dry-brush splits driven by wetness (飛白)", "jp": "渇筆（かすれ）を墨量シミュレーションに連動", "summary": "Hairline gaps appear wherever the simulated tuft has run low on ink, on any long stroke (not only long 撇); in very dry tails the gaps stay open to the tip so it forks into a few prongs.", "why": "Chu & Tai 2004 'Dry brush': ink deposits only where the dry map peaks, with a threshold set by brush wetness and pressure; Chu & Tai 2002 Sec. 3: a drying tuft splits, giving the flying-white effect; Xu et al. 2004 Sec. 5.5 splits the tuft when stress exceeds a threshold. Today kasure is hard-gated to 撇 over 45 units and ignores the wetness the model computes.", "affects": "Long strokes dry toward the end: sweeps fork open at the tip, stopped strokes and box frames get narrower splits that close before the end. A dry zone also picks up paper-grain speckle.", "risk": "Adds visible texture to strokes that were clean. Depletion is a model heuristic, so which strokes dry out is a tuning decision.", "look_for": "Tails of 撇 / 捺, ends of long 横 and 竖.", "params": [{"key": "freeWidth", "label": "Split width on sweeps (払い)", "min": 0.0, "max": 0.35, "step": 0.01}, {"key": "stopWidth", "label": "Split width on stopped strokes / frames", "min": 0.0, "max": 0.25, "step": 0.01}, {"key": "alpha", "label": "Split clarity (1 = bare paper)", "min": 0.2, "max": 1.0, "step": 0.02}, {"key": "streakDepth", "label": "Split breakup along the stroke", "min": 0.0, "max": 0.9, "step": 0.05}, {"key": "grain", "label": "Paper-grain speckle in the dry zone", "min": 0.0, "max": 1.5, "step": 0.05}, {"key": "wetOnset", "label": "How early the brush runs dry (higher = more strokes)", "min": 0.78, "max": 0.94, "step": 0.005}, {"key": "minLen", "label": "Shortest stroke that can split (KanjiVG units)", "min": 15, "max": 100, "step": 1}]}, {"id": "anchoredEnds", "title": "Stroke-end forms keep absolute size", "jp": "払い・捺の長さを絶対長に固定", "summary": "The 捺 wave-foot and the 撇 taper keep a fixed physical length (capped) instead of stretching with the whole stroke, so a long stroke no longer gets an extremely long thin tail.", "why": "Hsu & Lee 1994 Sec. 4.1: stroke-end features such as serifs should be anchored so they keep their proportions while the body stretches with the path. Currently fractions of total length are used (foot from u=0.72, taper from u=0.43).", "affects": "Long 捺 (over ~32 units) and long free 撇 (over ~42 units). Short strokes are identical.", "risk": "Long sweeps become fatter for longer and then taper more abruptly, which changes the elegant long taper typical of slender-gold style.", "look_for": "The long 捺 in 道 / 永 / 長, the long 撇 in 井 / 力.", "params": [{"key": "naFootLen", "label": "捺 foot taper length (KanjiVG units)", "min": 3, "max": 20, "step": 0.5}, {"key": "sweepLen", "label": "撇 taper length (KanjiVG units)", "min": 8, "max": 45, "step": 1}]}, {"id": "wetDryTrim", "title": "Paper-fibre wet/dry edge trimming", "jp": "紙繊維による滲み境界のトリミング", "summary": "The silhouette is trimmed where the low-passed wet mask minus a paper-fibre roughness term falls below zero, so the edge follows the fibres instead of the ideal contour. Colour and darkness are untouched.", "why": "Chu & Tai 2005 (MoXi) Sec. 6.1 / Eq. 11 trims the output where phi = rho_tau + r_scale (r + r_bias) < 0, with r a blurred random-spot texture, for natural, slightly rough boundaries.", "affects": "Every stroke edge; bites deepen as the brush dries along a stroke.", "risk": "Slightly ragged silhouettes. Interacts with the nijimi halo thresholds used by the audit metrics, which would be rechecked.", "look_for": "Edges at 2-3x zoom in the swipe compare.", "params": [{"key": "depthPx", "label": "Bite depth into the edge (px)", "min": 0.0, "max": 8.0, "step": 0.1}, {"key": "biteLo", "label": "Bite rarity (higher = fewer bites)", "min": -0.3, "max": 0.8, "step": 0.02}, {"key": "macroMix", "label": "Bite size: fine fibres to coarse fibres", "min": 0.0, "max": 1.0, "step": 0.05}, {"key": "wetFloor", "label": "Raggedness while the brush is still wet", "min": 0.0, "max": 1.0, "step": 0.05}, {"key": "fineRough", "label": "Fine fibre nibbling at the rim", "min": 0.0, "max": 0.8, "step": 0.02}]}]};
+  const DATA = {"chars": ["永", "道", "心", "成", "水", "井", "力", "九", "長", "必", "国", "日"], "strokes": {"永": [{"id": "kvg:06c38-s1", "d": "M45.5,13.25c5.12,2.4,8.62,5.75,10.75,9", "type": "㇔", "component": "丶"}, {"id": "kvg:06c38-s2", "d": "M31.75,37.25c1.88,0.75,4.12,1,6.07,0.55c3.62-0.83,9.41-2.51,13.04-3.35c3-0.7,5.16,0.8,5.16,4.05c0,14.5-0.26,45.45-0.26,50c0,12-7.02,2.84-8.52,1.7", "type": "㇆/㇚", "component": "水"}, {"id": "kvg:06c38-s3", "d": "M14.25,58.68c1.75,0.45,3.46,0.3,5-0.02c2.5-0.53,12.84-3.54,15.34-4.49c2.5-0.95,4.65,0.77,3.75,2.85C33.5,68.25,25.75,79.75,16,86.37", "type": "㇇", "component": "水"}, {"id": "kvg:06c38-s4", "d": "M81.22,36.52c-0.1,1.11-0.78,2.03-1.52,2.7c-4.83,4.38-13.96,9.73-21.46,11.92", "type": "㇒", "component": "水"}, {"id": "kvg:06c38-s5", "d": "M58,52.74c9.88,9.52,20.02,18.85,29.07,24.84c2.01,1.33,4.05,2.66,6.43,3.56", "type": "㇏", "component": "水"}], "道": [{"id": "kvg:09053-s1", "d": "M49.38,14.88c2.61,1.78,6.73,7.3,7.38,10.06", "type": "㇔", "component": "首"}, {"id": "kvg:09053-s2", "d": "M77.25,12.5c0.06,0.84-0.03,1.66-0.37,2.42c-1.38,3.08-3.38,6.7-6.63,10.2", "type": "㇒", "component": "首"}, {"id": "kvg:09053-s3", "d": "M42.06,32.6c1.75,0.45,4.97,0.38,6.7,0.2c9.99-1.05,25.86-2.93,36.82-3.2c2.91-0.07,4.8,0.15,6.12,0.44", "type": "㇐", "component": "首"}, {"id": "kvg:09053-s4", "d": "M64.26,33.62c0.25,0.1-0.23,1.75-0.39,2.04c-1.03,1.93-2.08,4.55-4.5,7.09", "type": "㇒", "component": "自"}, {"id": "kvg:09053-s5", "d": "M51.06,43.52c0.77,0.77,1.13,1.71,1.13,2.82c0,0.9-0.1,22.98-0.06,31.9c0.01,2.08,0.03,3.45,0.06,3.66", "type": "㇑", "component": "目"}, {"id": "kvg:09053-s6", "d": "M53.01,45.09c6.24-0.71,22.66-2.75,24.6-2.88c1.96-0.14,3.35,0.55,3.35,2.81c0,1.08-0.57,23.4-0.8,32.24c-0.05,2-0.09,3.28-0.12,3.43", "type": "㇕a", "component": "目"}, {"id": "kvg:09053-s7", "d": "M52.9,55.9c6.1-0.4,20.85-2.15,26.64-2.34", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s8", "d": "M53.11,67.65c6.85-0.47,19.47-1.75,26.13-1.75", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s9", "d": "M53.36,79.25c5.14,0,18.66-1.07,25.31-1.07", "type": "㇐a", "component": "目"}, {"id": "kvg:09053-s10", "d": "M19.75,20c3.38,1.75,8,6.12,9.5,8.75", "type": "㇔", "component": "⻌"}, {"id": "kvg:09053-s11", "d": "M13,51.53c2.25,0.86,3.75,0.43,4.75,0.22s9-3.47,10.5-3.9c2.96-0.85,4.22,0.21,2.44,3.03c-6.56,10.38-6.81,8.5-0.11,14.4c2.39,2.1,2.15,3.52-0.57,5.48C25.5,74,21.75,76.25,17.5,79.04", "type": "㇋", "component": "⻌"}, {"id": "kvg:09053-s12", "d": "M12.5,81.71c3.11-0.47,9.22-0.87,13.97-0.71c7.15,0.25,31.13,8.25,35.71,9.46C74.61,93.76,81.62,95.5,91,96.05", "type": "㇏a", "component": "⻌"}], "心": [{"id": "kvg:05fc3-s1", "d": "M16.88,52.75c0,6.32-1.46,17.69-3.75,23", "type": "㇔", "component": "心"}, {"id": "kvg:05fc3-s2", "d": "M31.25,49.25c9,22.75,27,35.5,53.25,32.25c7.75-0.96,7.25-4.75,3-9.5", "type": "㇃", "component": "心"}, {"id": "kvg:05fc3-s3", "d": "M50.25,26c2,5.12,7.5,13.75,8.75,7.75", "type": "㇔a", "component": "心"}, {"id": "kvg:05fc3-s4", "d": "M85.5,30c4,2.75,7.62,7,10.5,14", "type": "㇔", "component": "心"}], "成": [{"id": "kvg:06210-s1", "d": "M25.9,31.5c0.99,0.99,1.24,2.38,1.24,3.74c0,18.01-2.39,42.26-15.08,56.97", "type": "㇒", "component": "丿"}, {"id": "kvg:06210-s2", "d": "M27.5,33.7c2.12,0.68,5.54,0.04,8.37-0.26c9.61-1.04,30.55-3.41,42.77-4.41c3.06-0.25,5.85-0.38,8.86,0.26", "type": "㇐", "component": "弋"}, {"id": "kvg:06210-s3", "d": "M27.5,56.26c6.88-1.01,16.84-3.16,18.88-3.27c2.37-0.12,3.59,1.18,3.23,3.67c-0.35,2.48-2.34,19.81-7.55,26.56c-1.56,2.03-4.39,0.14-5.79-1.34", "type": "㇆a", "component": "𠂊"}, {"id": "kvg:06210-s4", "d": "M56,10.5c2.35,2.61,2.42,4.92,2.84,8.38C62.62,50.38,68,73,91.45,92.7c5.73,4.81,5.5,0.78,4.69-7.24", "type": "㇂", "component": "戈"}, {"id": "kvg:06210-s5", "d": "M82.98,45.14c0.27,1.36,0.21,2.71-0.16,4.2C80.5,58.62,71,77.5,55.06,89.47", "type": "㇒", "component": "丿"}, {"id": "kvg:06210-s6", "d": "M75.25,11.75c2.94,1.6,7.63,5.26,9,8", "type": "㇔", "component": "丶"}], "水": [{"id": "kvg:06c34-s1", "d": "M52.77,15.08c1.08,1.08,1.67,2.49,1.76,5.52c0.4,14.55-0.26,62.16-0.26,67.12c0,9.78-7.52,0.03-9.02-1.22", "type": "㇚", "component": "水"}, {"id": "kvg:06c34-s2", "d": "M17.5,45.75c1.75,0.62,3.73,0.43,5.25,0C25.88,44.88,36.09,41,38.59,40s4.47,1.24,3.75,3.5C39,54,28.25,69,19,74.75", "type": "㇇", "component": "水"}, {"id": "kvg:06c34-s3", "d": "M81.22,27.5c-0.22,1.25-0.72,2.25-1.52,2.97c-5.64,5.1-12.45,9.78-22.45,13.78", "type": "㇒", "component": "水"}, {"id": "kvg:06c34-s4", "d": "M57,46c8.82,10.73,19.23,21.46,28.42,27.42c2.16,1.4,4.52,3,7.08,3.58", "type": "㇏", "component": "水"}], "井": [{"id": "kvg:04e95-s1", "d": "M23.5,36.9c2.13,0.77,4.95,0.45,7.14,0.16c10.59-1.37,37.06-3.96,49.24-4.82c2.63-0.19,4.81-0.18,7.38,0.38", "type": "㇐", "component": "二"}, {"id": "kvg:04e95-s2", "d": "M14.25,62.95c3.44,1.23,7.55,0.89,11.12,0.49c12.88-1.44,42.51-4.32,61.11-5.17c3.37-0.15,6.23,0.06,9.52,0.77", "type": "㇐", "component": "十"}, {"id": "kvg:04e95-s3", "d": "M40,16.5c0.75,1,0.98,2.47,1,3.5c1.12,55.5-2.38,62-19.25,78.25", "type": "㇒", "component": "丿"}, {"id": "kvg:04e95-s4", "d": "M66.62,11.25c0.88,0.88,1.21,2.25,1.21,3.5c0,0.73-0.06,54.49-0.07,77.38c0,3.92,0,6.94,0,8.62", "type": "㇑", "component": "十"}], "力": [{"id": "kvg:0529b-s1", "d": "M21.5,38.25c2.71,1.16,5.48,1.13,8.27,0.71c14.44-2.14,39.36-6.21,53.23-8.21c4.48-0.65,6.25,1.38,5.5,5.75c-2.81,16.37-9,38.75-20,53.25c-6.14,8.09-9.5,3-12.5-0.75", "type": "㇆", "component": "力"}, {"id": "kvg:0529b-s2", "d": "M56.88,13.68c0.62,2.57,0.56,4.63,0,7.19c-4.11,18.97-16.53,49.27-43.49,68.79", "type": "㇒", "component": "力"}], "九": [{"id": "kvg:04e5d-s1", "d": "M41.88,14.38c1,1.38,1.5,3.25,1.5,5.12c0,40.13-9.12,57.5-28.5,68.75", "type": "㇒", "component": "丿"}, {"id": "kvg:04e5d-s2", "d": "M13.5,45.75c2.88,0.85,5.78,0.05,8.58-0.66c8.47-2.14,39.88-9.79,40.92-9.84c2.5-0.12,4.75,0.5,4.25,4.75c-0.5,4.25-5.5,20.75-7,32.5c-2.23,17.46,2,19.37,18.21,19.37c13.79,0,19.01-1.07,19.27-10.12", "type": "㇈", "component": "乙"}], "長": [{"id": "kvg:09577-s1", "d": "M34,14.75C35.25,16,36,18,36,19.5s0,33.5,0,35.75", "type": "㇑a", "component": "長"}, {"id": "kvg:09577-s2", "d": "M37.75,16c9.6-0.15,21.73-3.26,26.63-4.2c1.97-0.38,3.9-0.41,5.87,0.06", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s3", "d": "M37.25,29.5C48.12,28.25,57,27,64,25.72c1.96-0.36,3.76-0.25,5.25,0.06", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s4", "d": "M37.5,42.5c8.88-0.86,21.62-2.62,26.75-3.53c1.97-0.35,3.88-0.32,5.75,0", "type": "㇐b", "component": "長"}, {"id": "kvg:09577-s5", "d": "M10.88,58.23c3.14,0.86,6.44,0.68,9.62,0.29c19.73-2.35,44.86-6.1,65-7.61c2.97-0.22,5.7-0.08,8.63,0.4", "type": "㇐", "component": "長"}, {"id": "kvg:09577-s6", "d": "M31.25,60.25c0.94,0.94,1.39,2.38,1.39,4c0,11.82-0.7,28.19-0.7,30.19s1.65,3.14,3.74,1.64c2.09-1.5,17.25-11.09,20.03-12.59", "type": "㇙", "component": "長"}, {"id": "kvg:09577-s7", "d": "M76.52,55.25c0.23,1.25-0.33,2.45-1.05,3.41C73.5,61.25,69.62,65,64.62,68.75", "type": "㇒", "component": "長"}, {"id": "kvg:09577-s8", "d": "M46.5,62.25c8.21,0,34.52,25.9,44.28,29.5C93.12,92.61,94.51,93,97,93.5", "type": "㇏", "component": "長"}], "必": [{"id": "kvg:05fc5-s1", "d": "M40.5,24.5c2,6.12,6.65,13.65,7.75,7.36", "type": "㇔", "component": "丶"}, {"id": "kvg:05fc5-s2", "d": "M69.62,24.88c0.13,1.56-0.22,3.02-0.77,5.26c-3.24,13.24-18.84,45.88-46.29,61.08", "type": "㇒", "component": "丿"}, {"id": "kvg:05fc5-s3", "d": "M31,44.5c9.62,23,21.12,42.5,47,43.44c10.24,0.37,7.75-3.89,3.5-9.35", "type": "㇃", "component": "心"}, {"id": "kvg:05fc5-s4", "d": "M17.75,51.81c-0.5,8.44-1.63,14.44-3.75,21.69", "type": "㇔", "component": "心"}, {"id": "kvg:05fc5-s5", "d": "M84.25,44.88c4.49,3.51,9.38,10.38,11.5,17.54", "type": "㇔", "component": "心"}], "国": [{"id": "kvg:056fd-s1", "d": "M19,16.82c1.09,1.09,1.61,2.51,1.61,4.41c0,14.65-0.22,44.9-0.22,71.53c0,1.95-0.06,3.86-0.09,5.75", "type": "㇑", "component": "囗"}, {"id": "kvg:056fd-s2", "d": "M21.52,18.67C41.38,16.75,74.03,13.5,85,13.5c3.38,0,5,1.85,5,5.25c0,15.36-0.04,47.89-0.08,70.62c0,1.68,0,3.31,0,4.88", "type": "㇕a", "component": "囗"}, {"id": "kvg:056fd-s3", "d": "M35.12,33.88c1.32,0.28,4.2,0.44,5.51,0.28c10.47-1.29,20.62-2.54,28.62-3.13c2.02-0.15,3.88-0.19,5.56,0.04", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s4", "d": "M52.8,34.89c0.96,0.97,1.47,2.48,1.47,3.81c0,3.99-0.13,24.74-0.09,33.55", "type": "㇑a", "component": "王"}, {"id": "kvg:056fd-s5", "d": "M37.58,52.16c1.79,0.22,3.41,0.14,5.36-0.08c7.56-0.83,17.56-1.99,25.38-2.8c1.25-0.13,4.02-0.15,5.89,0.17", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s6", "d": "M31.08,75.14c1.54,0.36,3.85,0.28,5.19,0.16c9.98-0.92,25.85-2.67,37.03-3.54c2.15-0.17,5.04-0.18,6.12,0.13", "type": "㇐", "component": "王"}, {"id": "kvg:056fd-s7", "d": "M67.75,56.62c3,1.75,6.12,5.12,8,8.38", "type": "㇔", "component": "丶"}, {"id": "kvg:056fd-s8", "d": "M21.5,93.01c14.25-0.51,48.38-1.89,67-2.51", "type": "㇐a", "component": "囗"}], "日": [{"id": "kvg:065e5-s1", "d": "M31.5,24.5c1.12,1.12,1.74,2.75,1.74,4.75c0,1.6-0.16,38.11-0.09,53.5c0.02,3.82,0.05,6.35,0.09,6.75", "type": "㇑", "component": "日"}, {"id": "kvg:065e5-s2", "d": "M33.48,26c0.8-0.05,37.67-3.01,40.77-3.25c3.19-0.25,5,1.75,5,4.25c0,4-0.22,40.84-0.23,56c0,3.48,0,5.72,0,6", "type": "㇕a", "component": "日"}, {"id": "kvg:065e5-s3", "d": "M34.22,55.25c7.78-0.5,35.9-2.5,44.06-2.75", "type": "㇐a", "component": "日"}, {"id": "kvg:065e5-s4", "d": "M34.23,86.5c10.52-0.75,34.15-2.12,43.81-2.25", "type": "㇐a", "component": "日"}]}, "variants": [{"id": "ellipticalCaps", "title": "Elliptical start / end caps", "jp": "楕円断面の起筆・収筆", "summary": "Pressed starts and tome (stop) ends become half-ellipses whose depth follows the simulated tuft flattening, instead of a nearly flat chop.", "why": "Chu & Tai 2002 Sec. 4.1.2 / 2004 model the tuft footprint as two half-ellipses; Xu et al. 2004 Eq. 18 elongates the ellipse with sideways drag. The current caps use fixed shallow fractions of the width and never read the ellipticity the model already computes.", "affects": "Every stroke with a blunt start or end (horizontals, verticals, dots, 横折 ends). Sharp-tipped strokes (撇 / 捺 tails, 鉤) are unchanged.", "risk": "Ends look rounder / softer. May feel less crisp for a 瘦金體 (slender gold) style that prefers squared ends.", "look_for": "Left and right ends of horizontals, the top of verticals, dots.", "params": [{"key": "exitDepth", "label": "End-cap roundness", "min": 0.15, "max": 0.8, "step": 0.01}, {"key": "entryDepth", "label": "Start-cap roundness", "min": 0.1, "max": 0.7, "step": 0.01}, {"key": "ellipticityGain", "label": "Extra roundness when the tuft is flattened", "min": 0.0, "max": 0.8, "step": 0.02}]}, {"id": "strongCefeng", "title": "Stronger oblique-brush (側鋒) posture", "jp": "側鋒の効果を強める", "summary": "When the brush is slanted (側鋒) the tuft clearly shifts toward one stroke edge and the tone becomes asymmetric (tip side darker, belly side lighter); exposed-tip (露鋒) starts keep that shift from the first millimetre.", "why": "Xie et al. 2013 Sec. 4.1: in the oblique style the tip touches one side of the boundary and the belly is tangent to the other; Chu & Tai 2002 Sec. 2 describes slanted strokes the same way. Today the spine moves only ~5% of the width, so upright and oblique strokes look the same.", "affects": "All strokes whose entry direction differs from the nib angle (mostly 撇, 点, 横 with a slanted attack).", "risk": "Shifts where the contour sits relative to the KanjiVG centreline (a few px) and raises tonal contrast across the width. Strength is a model choice rather than a measured value.", "look_for": "Tonal asymmetry across 撇 and 点, slight lateral offset of slanted 横.", "params": [{"key": "shiftGain", "label": "Tuft shift toward one edge", "min": 0.0, "max": 0.6, "step": 0.01}, {"key": "shiftCap", "label": "Maximum shift (fraction of width)", "min": 0.05, "max": 0.6, "step": 0.01}, {"key": "toneGain", "label": "Tip-side vs. belly-side tone contrast", "min": 1.0, "max": 5.0, "step": 0.1}, {"key": "entryFloor", "label": "Shift already present at an exposed-tip start", "min": 0.0, "max": 1.0, "step": 0.05}]}, {"id": "anchoredEnds", "title": "Stroke-end forms keep absolute size", "jp": "払い・捺の長さを絶対長に固定", "summary": "The 捺 wave-foot and the 撇 taper keep a fixed physical length (capped) instead of stretching with the whole stroke, so a long stroke no longer gets an extremely long thin tail.", "why": "Hsu & Lee 1994 Sec. 4.1: stroke-end features such as serifs should be anchored so they keep their proportions while the body stretches with the path. Currently fractions of total length are used (foot from u=0.72, taper from u=0.43).", "affects": "Long 捺 (over ~32 units) and long free 撇 (over ~42 units). Short strokes are identical.", "risk": "Long sweeps become fatter for longer and then taper more abruptly, which changes the elegant long taper typical of slender-gold style.", "look_for": "The long 捺 in 道 / 永 / 長, the long 撇 in 井 / 力.", "params": [{"key": "naFootLen", "label": "捺 foot taper length (KanjiVG units)", "min": 3, "max": 20, "step": 0.5}, {"key": "sweepLen", "label": "撇 taper length (KanjiVG units)", "min": 8, "max": 45, "step": 1}]}]};
   const STORE = "strokeApproval.v1";
   const PAPER = "#f4efe3";
   const VARIANT_IDS = DATA.variants.map(v => v.id);

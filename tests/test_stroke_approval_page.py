@@ -19,16 +19,16 @@ window.addEventListener('error', e => window.__errs.push(String(e.message)));
 setTimeout(() => {
   try {
     document.querySelector('input[name="dec-ellipticalCaps"][value="ok"]').click();
-    const ta = document.querySelector('#card-mitreCorners textarea');
-    document.querySelector('input[name="dec-mitreCorners"][value="tweak"]').click();
+    const ta = document.querySelector('#card-strongCefeng textarea');
+    document.querySelector('input[name="dec-strongCefeng"][value="tweak"]').click();
     ta.value = 'less sharp';
     ta.dispatchEvent(new Event('input'));
     document.getElementById('renderCombined').click();
-    window.__dkBefore = document.querySelector('#card-dryKasure .view:nth-child(2) canvas').toDataURL();
-    const slider = document.querySelector('#card-dryKasure .tune-row input[type=range]');
+    window.__dkBefore = document.querySelector('#card-ellipticalCaps .view:nth-child(2) canvas').toDataURL();
+    const slider = document.querySelector('#card-ellipticalCaps .tune-row input[type=range]');
     slider.value = slider.max;
     slider.dispatchEvent(new Event('input'));
-    document.querySelector('#card-wetDryTrim .view').click();
+    document.querySelector('#card-anchoredEnds .view').click();
   } catch (e) { window.__errs.push('driver: ' + e.message); }
   setTimeout(() => {
     const out = document.createElement('pre');
@@ -42,8 +42,8 @@ setTimeout(() => {
       combined: document.querySelectorAll('#combPair canvas').length,
       stats: [...document.querySelectorAll('.stat')].map(s => s.textContent),
       sliders: Object.fromEntries([...document.querySelectorAll('#cards .card')].map(c => [c.id.slice(5), c.querySelectorAll('.tune-row input[type=range]').length])),
-      dkChanged: window.__dkBefore !== document.querySelector('#card-dryKasure .view:nth-child(2) canvas').toDataURL(),
-      dkMod: (document.querySelector('#card-dryKasure .tune-head .mod') || {}).textContent,
+      dkChanged: window.__dkBefore !== document.querySelector('#card-ellipticalCaps .view:nth-child(2) canvas').toDataURL(),
+      dkMod: (document.querySelector('#card-ellipticalCaps .tune-head .mod') || {}).textContent,
     });
     document.body.append(out);
   }, 8000);
@@ -83,8 +83,8 @@ def test_stroke_approval_page_renders_variants_and_records_decisions() -> None:
     assert data["modalOpen"] is True
     decisions = data["store"]["decisions"]
     assert decisions["ellipticalCaps"]["decision"] == "ok"
-    assert decisions["mitreCorners"]["decision"] == "tweak"
-    assert decisions["mitreCorners"]["comment"] == "less sharp"
+    assert decisions["strongCefeng"]["decision"] == "tweak"
+    assert decisions["strongCefeng"]["comment"] == "less sharp"
     # every variant must actually change pixels for the default character (otherwise the review page shows nothing)
     assert len(data["stats"]) == len(VARIANTS)
     for line in data["stats"]:
@@ -95,5 +95,5 @@ def test_stroke_approval_page_renders_variants_and_records_decisions() -> None:
         assert data["sliders"][v["id"]] == len(v.get("params", [])), v["id"]
     assert data["dkChanged"] is True
     assert "1 slider changed" in data["dkMod"]
-    first_key = next(v for v in VARIANTS if v["id"] == "dryKasure")["params"][0]
-    assert data["store"]["params"]["dryKasure"] == {first_key["key"]: first_key["max"]}
+    first_key = next(v for v in VARIANTS if v["id"] == "ellipticalCaps")["params"][0]
+    assert data["store"]["params"]["ellipticalCaps"] == {first_key["key"]: first_key["max"]}

@@ -12,10 +12,10 @@ card size (~264 px) and compared on ink darkness:
 
 A variant counts as visibly noticeable on a character when blob_px >= MIN_BLOB (one coherent changed region)
 or visible_px >= MIN_SPREAD (many small changes spread along the contour, e.g. a roughened edge). MIN_SPREAD is
-calibrated on the round-1 review: wetDryTrim at <= 125 changed display px was rated "too subtle".
+calibrated on the round-1 review, where a variant changing <= 125 display px was rated "too subtle".
 
 CLI:
-    python3 scripts/audit/variant_visibility.py [--variants dryKasure,wetDryTrim] [--chars 永国] [--app-js PATH]
+    python3 scripts/audit/variant_visibility.py [--variants strongCefeng,ellipticalCaps] [--chars 永国] [--app-js PATH]
 """
 
 from __future__ import annotations

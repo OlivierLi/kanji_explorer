@@ -215,27 +215,27 @@ def test_cli_writes_file_when_not_dry_run(tmp_path: Path) -> None:
 
 
 _TUNED_JS = (
-    "const STROKE_VARIANTS = {\n  dryKasure: false,\n  wetDryTrim: false\n};\n"
-    "const DRY_KASURE_TUNING = {\n  freeWidth: 0.14,      // comment kept\n  grain: 0.5\n};\n"
-    "const WET_DRY_TRIM_TUNING = {\n  depthPx: 2.5\n};\n"
-    "const STROKE_VARIANT_TUNING = {\n  dryKasure: DRY_KASURE_TUNING,\n  wetDryTrim: WET_DRY_TRIM_TUNING\n};\n"
+    "const STROKE_VARIANTS = {\n  strongCefeng: false,\n  anchoredEnds: false\n};\n"
+    "const STRONG_CEFENG_TUNING = {\n  shiftGain: 0.14,      // comment kept\n  toneGain: 0.5\n};\n"
+    "const ANCHORED_ENDS_TUNING = {\n  sweepLen: 2.5\n};\n"
+    "const STROKE_VARIANT_TUNING = {\n  strongCefeng: STRONG_CEFENG_TUNING,\n  anchoredEnds: ANCHORED_ENDS_TUNING\n};\n"
 )
 
 
 def test_apply_params_writes_ok_and_tweak_values_only() -> None:
     decisions = {"decisions": {
-        "dryKasure": {"decision": "tweak", "params": {"freeWidth": 0.09, "grain": 0.5}},
-        "wetDryTrim": {"decision": "no", "params": {"depthPx": 7.0}},
+        "strongCefeng": {"decision": "tweak", "params": {"shiftGain": 0.09, "toneGain": 0.5}},
+        "anchoredEnds": {"decision": "no", "params": {"sweepLen": 7.0}},
     }}
     new_js, changes = apply_params(_TUNED_JS, decisions)
-    assert changes == {"dryKasure": {"freeWidth": (0.14, 0.09)}}
-    assert "freeWidth: 0.09,      // comment kept" in new_js
-    assert "depthPx: 2.5" in new_js  # rejected variant untouched
+    assert changes == {"strongCefeng": {"shiftGain": (0.14, 0.09)}}
+    assert "shiftGain: 0.09,      // comment kept" in new_js
+    assert "sweepLen: 2.5" in new_js  # rejected variant untouched
     assert new_js.replace("0.09", "0.14", 1) == _TUNED_JS
 
 
 def test_apply_params_warns_on_unknown_key() -> None:
-    decisions = {"decisions": {"dryKasure": {"decision": "ok", "params": {"nope": 1.0}}}}
+    decisions = {"decisions": {"strongCefeng": {"decision": "ok", "params": {"nope": 1.0}}}}
     with pytest.warns(UserWarning, match="Unknown param 'nope'"):
         new_js, changes = apply_params(_TUNED_JS, decisions)
     assert changes == {} and new_js == _TUNED_JS
